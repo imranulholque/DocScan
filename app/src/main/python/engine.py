@@ -7,6 +7,14 @@ from PIL import Image, ImageOps
 # extra common paper sizes (PDF points); core.pdf_page() reads core.PAGE_SIZES, so they work everywhere
 core.PAGE_SIZES.update({"a5": (419.528, 595.276), "legal": (612.0, 1008.0)})
 
+# OpenCV spreads its work over every CPU core by default, which leaves the phone's UI thread starving (the crop screen's
+# scanning animation froze). Two threads keep the page finder fast and leave the other cores free for drawing.
+try:
+    if scanner.cv2 is not None:
+        scanner.cv2.setNumThreads(2)
+except Exception:
+    pass
+
 NUM_MARGIN = 28.0            # page number distance from the page edge (PDF points, about 1 cm)
 NUM_DIGIT_H = 0.676          # height of a Times digit (em)
 NUM_DIGIT_W = 0.5            # width of a Times digit (em)

@@ -120,12 +120,9 @@ private fun CropBody(vm: AppVM, page: Page) {
 
     // animations: a scanning light while the page is being searched, corners that glide to the page, a pulse when found
     val inf = rememberInfiniteTransition(label = "crop")
-    val sweepT by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Restart), label = "sweepT")
-    val sweepU by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(3700, easing = LinearEasing), RepeatMode.Restart), label = "sweepU")
-    // triangle waves: 0 -> 1 -> 0 at constant speed; down = the line is moving down right now
-    val scan = if (sweepT < 0.5f) sweepT * 2f else 2f - sweepT * 2f
-    val down = sweepT < 0.5f
-    val scan2 = if (sweepU < 0.5f) sweepU * 2f else 2f - sweepU * 2f
+    // 0 -> 1 once per full trip (down, then back up). It is only READ inside the Canvas draw block below, so the animation
+    // never recomposes the screen: every frame redraws just the picture overlay and stays smooth while the page finder works.
+    val sweepT by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing), RepeatMode.Restart), label = "sweepT")
     val ants by inf.animateFloat(0f, 36f, infiniteRepeatable(tween(700, easing = LinearEasing)), label = "ants")
     val breathe by inf.animateFloat(0.35f, 1f, infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "breathe")
     val found = remember { Animatable(0f) }
@@ -284,6 +281,11 @@ private fun CropBody(vm: AppVM, page: Page) {
                     clipRect(left = ox, top = oy, right = ox + iw, bottom = oy + ih) {
                         // light dimming so the moving light stands out
                         drawRect(Color(0x40000000), Offset(ox, oy), Size(iw, ih))
+                        // the scan line slides top -> bottom -> top, easing softly at both ends like a real scanner head
+                        val sw = sweepT
+                        val down = sw < 0.5f
+                        val tri = if (down) sw * 2f else 2f - sw * 2f
+                        val scan = tri * tri * (3f - 2f * tri)
                         val y = oy + ih * scan
                         val trail = ih * 0.28f
                         // a trail of light BEHIND the line (the side it just came from), with a fine grid in it
@@ -302,12 +304,6 @@ private fun CropBody(vm: AppVM, page: Page) {
                         // the scan line itself: soft glow + bright core
                         drawLine(teal.copy(alpha = 0.40f), Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 4f)
                         drawLine(Color.White, Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 1.1f)
-                        // a thin line moving sideways crosses it
-                        val x = ox + iw * scan2
-                        drawLine(teal.copy(alpha = 0.30f), Offset(x, oy), Offset(x, oy + ih), strokeWidth = stroke * 3f)
-                        drawLine(teal, Offset(x, oy), Offset(x, oy + ih), strokeWidth = stroke * 0.8f)
-                        drawCircle(teal.copy(alpha = 0.35f), stroke * 6f, Offset(x, y))
-                        drawCircle(Color.White, stroke * 2.2f, Offset(x, y))
                     }
                     // 6. corner brackets that move in and out
                     val gap: Float = min(iw, ih) * 0.05f * breathe

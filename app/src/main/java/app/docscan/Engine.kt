@@ -10,8 +10,14 @@ import java.util.concurrent.Executors
 object Engine {
     class Detect(val sure: Boolean, val quad: List<Offset>)
 
-    private val dispatcher = Executors.newSingleThreadExecutor { r -> Thread(null, r, "docscan-python", 32L * 1024 * 1024) }
-        .asCoroutineDispatcher()
+    // Background priority: the heavy numpy / OpenCV work must never take the CPU away from the UI thread,
+    // otherwise animations (like the crop screen's scanning line) stall while a page is being analysed.
+    private val dispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(null, {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "docscan-python", 32L * 1024 * 1024)
+    }.asCoroutineDispatcher()
     private val mod by lazy { Python.getInstance().getModule("engine") }
 
     private suspend fun <T> py(block: () -> T): T = withContext(dispatcher) { block() }
