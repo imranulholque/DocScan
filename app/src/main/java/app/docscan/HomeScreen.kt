@@ -129,7 +129,12 @@ fun HomeScreen(vm: AppVM) {
             Step("2", s.how2, Modifier.weight(1f))
             Step("3", s.how3, Modifier.weight(1f))
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(22.dp))
+        Text(
+            s.credit, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
     }
 }
 

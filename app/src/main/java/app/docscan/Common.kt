@@ -2,7 +2,16 @@ package app.docscan
 
 import android.app.Activity
 import android.content.Context
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +32,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -62,11 +78,37 @@ fun BusyOverlay(text: String?) {
     ) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
             Row(Modifier.padding(horizontal = 22.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 3.dp)
+                ScanningDoc(Modifier.size(30.dp, 40.dp), paper = MaterialTheme.colorScheme.surfaceVariant)
                 Spacer(Modifier.width(16.dp))
                 Text(text, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
             }
         }
+    }
+}
+
+/** A small page with a light line that sweeps over it: "the app is working on this page". */
+@Composable
+fun ScanningDoc(
+    modifier: Modifier = Modifier.size(26.dp, 34.dp),
+    color: Color = Color(0xFF14B8A6),
+    paper: Color = Color.White,
+) {
+    val inf = rememberInfiniteTransition(label = "doc")
+    val t by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Reverse), label = "t")
+    Canvas(modifier.clip(RoundedCornerShape(6.dp))) {
+        val w = size.width; val h = size.height
+        drawRoundRect(paper, Offset.Zero, Size(w, h), CornerRadius(h * 0.1f, h * 0.1f))
+        for (i in 0..3) {
+            val y = h * (0.2f + i * 0.17f)
+            drawLine(Color(0x66808898), Offset(w * 0.18f, y), Offset(w * (if (i == 3) 0.5f else 0.82f), y), strokeWidth = h * 0.05f, cap = StrokeCap.Round)
+        }
+        val y = h * (0.06f + 0.88f * t)
+        val tail = h * 0.3f
+        drawRect(
+            Brush.verticalGradient(listOf(Color.Transparent, color.copy(alpha = 0.40f)), startY = y - tail, endY = y),
+            Offset(0f, y - tail), Size(w, tail),
+        )
+        drawLine(color, Offset(0f, y), Offset(w, y), strokeWidth = h * 0.07f, cap = StrokeCap.Round)
     }
 }
 
@@ -116,9 +158,15 @@ fun FormatPicker(vm: AppVM, showSize: Boolean = true) {
     }
     if (showSize && vm.fmt == "pdf") {
         SectionLabel(s.pdfSize)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Choice(s.sizeFit, vm.pdfSize == "fit", Modifier.weight(1f)) { vm.choosePdfSize("fit") }
-            Choice(s.sizeA4, vm.pdfSize == "a4", Modifier.weight(1f)) { vm.choosePdfSize("a4") }
-        }
+        PdfSizeRow(vm)
+    }
+}
+
+/** Picture size / A4 / A5 / Letter / Legal (scrolls sideways on a narrow phone). */
+@Composable
+fun PdfSizeRow(vm: AppVM) {
+    val s = LocalStr.current
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (sz in Paper.sizes) Choice(Paper.label(sz, s), vm.pdfSize == sz) { vm.choosePdfSize(sz) }
     }
 }

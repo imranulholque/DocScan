@@ -1,5 +1,7 @@
 # DocScan
 
+*Made by **Imranul Hoque Sabbir** (ইমরানুল হক সাব্বির).*
+
 Standalone Android app: scan one or many pages with the phone camera, crop (auto page finder + draggable corners and sides),
 make the text clear with ONE slider, and save as PDF / JPG / PNG to any folder or share straight to WhatsApp and other apps.
 
@@ -9,7 +11,13 @@ The scanning engine is the **Image Fixer** code, unchanged (`core.py`, `scanner.
 - Auto crop = the same `scanner.detect_document` the PC program uses.
 - "Text clarity" slider = the PC's shadow / paper-white / text-darkness / sharpness / clean-specks options merged into one 0-100 value
   (see `look()` in `app/src/main/python/engine.py` to change the mapping).
-- Looks: Original / Color / Gray / B&W, shown as small previews of your own page.
+- Looks: Original / Color / **Vivid** / Gray / B&W, shown as small previews of your own page.
+  - The text-clarity slider works on **every** look. On *Original* it keeps colours and paper exactly as photographed (0 = no change) and only makes the writing clearer.
+  - **Vivid** is for colour pictures (photos, coloured pages): even light, richer colours, sharper picture. The scan looks (Color / Gray / B&W) turn paper white and are meant for black-on-white documents.
+  - Changing the look or the slider shows a light sweep + label while it is being made, then a wipe reveals the new look. Auto crop shows a scanning light while it searches and the corners glide to the page.
+- **Page & number** tab (Review screen): format, PDF size (Picture size / A4 / A5 / Letter / Legal) and page number (6 positions, sizes 10-24 pt).
+  The page above shows the result live: paper shape, where the picture sits and the number. PDF numbers are real text in Times-Roman;
+  pictures (JPG/PNG) use the bundled Liberation Serif (Times New Roman look, same widths, SIL OFL licence) from `assets/fonts`.
 
 ## Build the APK on GitHub (no Android Studio needed)
 1. Create a repository, upload everything in this folder (keep the `keystore` folder), commit to `main`.

@@ -4,6 +4,14 @@ import core
 import scanner
 from PIL import Image, ImageOps
 
+# extra common paper sizes (PDF points); core.pdf_page() reads core.PAGE_SIZES, so they work everywhere
+core.PAGE_SIZES.update({"a5": (419.528, 595.276), "legal": (612.0, 1008.0)})
+
+NUM_MARGIN = 28.0            # page number distance from the page edge (PDF points, about 1 cm)
+NUM_DIGIT_H = 0.676          # height of a Times digit (em)
+NUM_DIGIT_W = 0.5            # width of a Times digit (em)
+CREDIT = "DocScan - Imranul Hoque Sabbir"
+
 AUTO_OK_SCORE = 0.6          # same thresholds as the PC program's Auto crop
 AUTO_OK_EDGE = 0.6
 
@@ -90,11 +98,92 @@ def look(mode, clarity):
     return t, shadow, sharp
 
 
+def _orig_look(im, clarity):
+    """'Original' keeps the paper and the colours exactly as photographed; only the writing gets clearer.
+    clarity 0 = untouched ... 100 = strongest. Only lightness is changed (core.clarity), so colours never shift."""
+    import numpy as np
+    t = max(0.0, min(1.0, float(clarity) / 100.0))
+    if t <= 0.0:
+        return im
+    look = core.new_look(sharp=int(85 * t), dark=int(10 * t), clear=int(10 * t))
+    return Image.fromarray(core.clarity(np.asarray(im.convert("RGB")), look))
+
+
+def _smoothstep(a):
+    import numpy as np
+    a = np.clip(a, 0.0, 1.0)
+    return a * a * (3.0 - 2.0 * a)
+
+
+def _vivid(im, clarity):
+    """A look for COLOUR pictures (photos, coloured pages, drawings). The scan looks keep only black text on white paper,
+    which flattens colours. This one keeps every colour and only
+      1. evens out the light (soft shadows lifted, same gain on r,g,b so no colour cast),
+      2. sets black / white points from the picture's own brightness,
+      3. adds a gentle S-curve contrast and a little colour richness (protected for already strong colours),
+      4. sharpens the lightness only (no coloured halos).
+    clarity 0..100 = how strong all of it is."""
+    import numpy as np
+    from PIL import ImageFilter
+    t = max(0.0, min(1.0, float(clarity) / 100.0))
+    rgb = im.convert("RGB")
+    W, H = rgb.size
+    x = np.asarray(rgb, dtype=np.float32) / 255.0
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+
+    # 1. light: "paper_light" with a WIDE window (so coloured objects are not mistaken for shadows), luminance gain only
+    ws = 480.0 / max(W, H)
+    sw, sh = max(16, round(W * ws)), max(16, round(H * ws))
+    small = np.asarray(rgb.resize((sw, sh), Image.Resampling.BOX))
+    bl = core.paper_light(small, None, 0.14).mean(2)
+    target = float(np.percentile(bl, 88))
+    g = np.clip(target / np.maximum(bl, 20.0), 1.0, 1.0 + 0.7 * (0.5 + 0.5 * t))
+    g = 1.0 + (g - 1.0) * (0.55 + 0.35 * t)
+    # blur the gain map a lot: the correction may follow soft shadows, never the edges of objects (no halos)
+    gm = Image.fromarray(np.clip((g - 1.0) / 0.7 * 255.0 + 0.5, 0, 255).astype(np.uint8))
+    gm = np.asarray(gm.filter(ImageFilter.GaussianBlur(0.06 * max(sw, sh))), dtype=np.float32) / 255.0 * 0.7 + 1.0
+    g = np.asarray(Image.fromarray(gm.astype(np.float32), "F").resize((W, H), Image.Resampling.BICUBIC), dtype=np.float32)
+    x = np.clip(x * g[..., None], 0.0, 1.0)
+
+    # 2. levels from the lightness (one lo / hi for all channels: no colour cast)
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+    sub = Y[::max(1, H // 400), ::max(1, W // 400)]
+    lo = float(np.percentile(sub, 0.3 + 0.5 * t))
+    hi = float(np.percentile(sub, 99.7 - 0.5 * t))
+    if hi - lo > 0.2:
+        x = np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+
+    # 3. mid-tones a little lighter if the picture is dark, S-curve (on lightness, keeps hue) + colour richness
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+    med = float(np.percentile(Y[::max(1, H // 300), ::max(1, W // 300)], 50))
+    if med < 0.55:
+        gam = float(np.clip(np.log(0.55) / np.log(max(med, 0.05)), 0.7, 1.0))
+        x = x ** (1.0 - (1.0 - gam) * (0.5 + 0.5 * t))
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+    k = 0.10 + 0.20 * t
+    Y2 = Y + k * (_smoothstep(Y) - Y)
+    ratio = (Y2 + 1e-4) / (Y + 1e-4)
+    x = np.clip(x * np.clip(ratio, 0.75, 1.4)[..., None], 0.0, 1.0)
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+    mx, mn = x.max(2), x.min(2)
+    sat = (mx - mn) / np.maximum(mx, 1e-3)
+    boost = (0.03 + 0.13 * t) * (1.0 - _smoothstep((sat - 0.35) / 0.55)) * _smoothstep(Y / 0.2)     # weak colours get more, strong ones stay natural
+    x = np.clip(Y[..., None] + (x - Y[..., None]) * (1.0 + boost)[..., None], 0.0, 1.0)
+
+    out = Image.fromarray(np.clip(x * 255.0 + 0.5, 0, 255).astype(np.uint8))
+
+    # 4. sharpen the lightness only
+    arr = core.clarity(np.asarray(out), core.new_look(sharp=int(60 * t)))
+    return Image.fromarray(arr)
+
+
 def apply(im, mode, clarity):
-    """PIL image -> PIL image. mode: orig | color | gray | bw."""
+    """PIL image -> PIL image. mode: orig | color | vivid | gray | bw."""
     import numpy as np
     if mode == "orig":
-        return im
+        return _orig_look(im, clarity)
+    if mode == "vivid":
+        return _vivid(im, clarity)
     t, shadow, sharp = look(mode, clarity)
     im = im.convert("RGB")
     strength = 0.3 + 0.7 * t
@@ -103,6 +192,40 @@ def apply(im, mode, clarity):
         return core.remove_shadow(Image.fromarray(arr), strength, None, shadow).convert("RGB")
     out = core.remove_shadow(im, strength, None, shadow).convert("RGB")
     return Image.fromarray(core.clarity(np.asarray(out), sharp))
+
+
+# ------------------------------------------------------------------ page number (Times New Roman look)
+def num_xy(pos, size, pw, ph, text):
+    """Left end and BASELINE of the page number in PDF points, y measured from the TOP of the page.
+    pos: tl tc tr bl bc br. Same formula as the live preview in the app."""
+    tw = len(text) * NUM_DIGIT_W * size
+    m = NUM_MARGIN
+    col = pos[1]
+    x = m if col == "l" else (pw - m - tw if col == "r" else (pw - tw) / 2.0)
+    y = m + NUM_DIGIT_H * size if pos[0] == "t" else ph - m
+    return x, y
+
+
+def stamp_number(im, number, pos, size, font_path):
+    """Draws the page number on a picture (JPG / PNG). The picture counts as a 'fit' page (long side = 841.89 pt)."""
+    from PIL import ImageDraw, ImageFont
+    if pos in (None, "", "off"):
+        return im
+    im = im.convert("RGB")
+    W, H = im.size
+    k = max(W, H) / 841.89
+    px = max(6, int(round(size * k)))
+    try:
+        font = ImageFont.truetype(font_path, px)
+    except Exception:
+        try:
+            font = ImageFont.load_default(size=px)
+        except Exception:
+            font = ImageFont.load_default()
+    text = str(int(number))
+    x, y = num_xy(pos, size, W / k, H / k, text)
+    ImageDraw.Draw(im).text((x * k, y * k), text, font=font, fill=(0, 0, 0), anchor="ls")
+    return im
 
 
 def render(path, dst, mode, clarity, max_side=0):
@@ -117,9 +240,10 @@ def render(path, dst, mode, clarity, max_side=0):
     return "%d,%d" % out.size
 
 
-def export_image(path, dst, fmt, mode, clarity):
-    """Final picture: JPG or PNG, full resolution, with the chosen look."""
+def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path=""):
+    """Final picture: JPG or PNG, full resolution, with the chosen look (and the page number, if chosen)."""
     out = apply(_open(path), mode, float(clarity))
+    out = stamp_number(out, number, pos, float(num_size), font_path)
     if fmt == "png":
         out.save(dst, "PNG", optimize=False)
     else:
@@ -127,21 +251,73 @@ def export_image(path, dst, fmt, mode, clarity):
     return "ok"
 
 
-def make_pdf(pages, dst, page_size="fit"):
-    """pages = 'path|mode|clarity' lines joined by newline. One PDF, one page per picture, in order
-    (core.save_pdf). page_size: fit | a4 | letter."""
-    srcs = []
+def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
+    """pages = 'path|mode|clarity' lines joined by newline. One PDF, one page per picture, in order.
+    page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Roman,
+    the standard PDF font = Times New Roman look, drawn as real text)."""
+    import io
+    rows = []
     for line in pages.split("\n"):
         if not line.strip():
             continue
         p, m, c = line.rsplit("|", 2)
-        srcs.append((lambda p=p, m=m, c=c: apply(_open(p), m, float(c))))
-    core.save_pdf(srcs, dst, page_size)
+        rows.append((p, m, c))
+    n = len(rows)
+    if n == 0:
+        raise ValueError("Nothing to save")
+    num_size = float(num_size)
+    numbered = num_pos not in (None, "", "off")
+    offsets = {}
+    with open(dst, "wb") as f:
+        f.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+
+        def put(num, body):
+            offsets[num] = f.tell()
+            f.write(b"%d 0 obj\n" % num + body + b"\nendobj\n")
+
+        font_obj = 3 + 3 * n
+        for i, (p, m, c) in enumerate(rows):
+            im = apply(_open(p), m, float(c)).convert("RGB")
+            w, h = im.size
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
+            data = buf.getvalue()
+            pw, ph, x, y, dw, dh = core.pdf_page(w, h, page_size)
+            base = 3 + 3 * i
+            res = "/XObject << /Im0 %d 0 R >> /ProcSet [/PDF /Text /ImageC]" % (base + 2)
+            if numbered:
+                res += " /Font << /F1 %d 0 R >>" % font_obj
+            put(base, ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2f %.2f] /Resources << %s >> /Contents %d 0 R >>"
+                       % (pw, ph, res, base + 1)).encode())
+            content = "q %.3f 0 0 %.3f %.3f %.3f cm /Im0 Do Q" % (dw, dh, x, y)
+            if numbered:
+                text = str(i + 1)
+                tx, ty = num_xy(num_pos, num_size, pw, ph, text)
+                content += " BT 0 g /F1 %.2f Tf %.2f %.2f Td (%s) Tj ET" % (num_size, tx, ph - ty, text)
+            content = content.encode()
+            put(base + 1, b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream")
+            put(base + 2, b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB "
+                          b"/BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n" % (w, h, len(data))
+                + data + b"\nendstream")
+            del im, data, buf
+        kids = " ".join("%d 0 R" % (3 + 3 * i) for i in range(n))
+        put(2, ("<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, n)).encode())
+        put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+        total = font_obj
+        put(font_obj, b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>")
+        info = font_obj + 1
+        put(info, ("<< /Producer (%s) /Creator (%s) >>" % (CREDIT, CREDIT)).encode())
+        total = info + 1
+        xref = f.tell()
+        f.write(b"xref\n0 %d\n0000000000 65535 f \n" % total)
+        for num in range(1, total):
+            f.write(b"%010d 00000 n \n" % offsets[num])
+        f.write(b"trailer\n<< /Size %d /Root 1 0 R /Info %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (total, info, xref))
     return "ok"
 
 
 def thumbs(path, prefix, clarity=60):
-    """Four small previews of the page (Original / Color / Gray / B&W) for the look picker."""
-    for m in ("orig", "color", "gray", "bw"):
-        render(path, "%s_%s.jpg" % (prefix, m), m, clarity, 220)
+    """Small previews of the page (Original / Color / Vivid / Gray / B&W) for the look picker."""
+    for m in ("orig", "color", "vivid", "gray", "bw"):
+        render(path, "%s_%s.jpg" % (prefix, m), m, 0 if m == "orig" else clarity, 220)
     return "ok"

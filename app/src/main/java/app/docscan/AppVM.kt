@@ -36,12 +36,18 @@ data class Page(
     val w: Int, val h: Int,           // its size
     val cropped: String? = null,      // straightened page
     val quad: List<Offset>? = null,   // the 4 corners (in the working photo)
-    val mode: String = "color",       // orig | color | gray | bw
-    val clarity: Int = 60,            // 0..100, the one text-clarity slider
+    val mode: String = "color",       // orig | color | vivid | gray | bw
+    val clarity: Int = 60,            // 0..100, the one text-clarity slider (color / vivid / gray / bw)
+    val oClarity: Int = 0,            // the same slider for "orig": 0 = picture exactly as photographed
     val prev: String? = null,         // preview of the chosen look
     val prevKey: String = "",
-    val thumbs: String? = null,       // prefix of the 4 small look previews
-)
+    val thumbs: String? = null,       // prefix of the small look previews
+) {
+    /** The clarity value that belongs to the chosen look. */
+    val eff: Int get() = if (mode == "orig") oClarity else clarity
+    /** Changes whenever the look changes: a preview is up to date when prevKey == key. */
+    val look: String get() = "$mode:$eff"
+}
 
 class Saved(val place: String, val files: List<File>)
 
@@ -57,12 +63,18 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         private set
     var treeUri by mutableStateOf(prefs.getString("tree", null))
         private set
+    var numPos by mutableStateOf(prefs.getString("numPos", "off") ?: "off")     // off | tl tc tr bl bc br
+        private set
+    var numSize by mutableIntStateOf(prefs.getInt("numSize", 12))                // points, Times New Roman
+        private set
     val str: Str get() = if (lang == "bn") Bn else En
 
     fun chooseLang(v: String) { lang = v; prefs.edit().putString("lang", v).apply() }
     fun chooseFmt(v: String) { fmt = v; prefs.edit().putString("fmt", v).apply() }
     fun choosePdfSize(v: String) { pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
     fun setTree(v: String?) { treeUri = v; prefs.edit().putString("tree", v).apply() }
+    fun chooseNumPos(v: String) { numPos = v; prefs.edit().putString("numPos", v).apply() }
+    fun chooseNumSize(v: Int) { numSize = v; prefs.edit().putInt("numSize", v).apply() }
 
     var screen by mutableStateOf(Screen.Home)
     val pages = mutableStateListOf<Page>()
@@ -220,19 +232,29 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     // ------------------------------------------------------------ page editing
-    fun setLook(id: String, mode: String? = null, clarity: Int? = null) =
-        upd(id) { it.copy(mode = mode ?: it.mode, clarity = clarity ?: it.clarity) }
+    /** Picks the look and / or moves the clarity slider (the slider value belongs to the look that is chosen). */
+    fun setLook(id: String, mode: String? = null, clarity: Int? = null) = upd(id) { p ->
+        val m = mode ?: p.mode
+        val q = p.copy(mode = m)
+        when {
+            clarity == null -> q
+            m == "orig" -> q.copy(oClarity = clarity)
+            else -> q.copy(clarity = clarity)
+        }
+    }
 
-    fun applyLookToAll(from: Page) { for (p in pages.toList()) upd(p.id) { it.copy(mode = from.mode, clarity = from.clarity) } }
+    fun applyLookToAll(from: Page) {
+        for (p in pages.toList()) upd(p.id) { it.copy(mode = from.mode, clarity = from.clarity, oClarity = from.oClarity) }
+    }
 
     suspend fun ensurePreview(id: String) {
         val p = page(id) ?: return
         val c = p.cropped ?: return
-        val key = "${p.mode}:${p.clarity}"
+        val key = p.look
         if (p.prev != null && p.prevKey == key) return
         val dst = file(id, "prev")
         try {
-            Engine.render(c, dst, p.mode, p.clarity, 1400)
+            Engine.render(c, dst, p.mode, p.eff, 1400)
         } catch (e: CancellationException) {
             File(dst).delete(); throw e
         } catch (e: Exception) {
@@ -298,7 +320,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (format == "pdf") {
             busy = str.processing
             val f = File(out, "DocScan_$ts.pdf")
-            Engine.makePdf(list.map { Triple(it.cropped!!, it.mode, it.clarity) }, f.absolutePath, size)
+            Engine.makePdf(list.map { Triple(it.cropped!!, it.mode, it.eff) }, f.absolutePath, size, numPos, numSize)
             return listOf(f)
         }
         val ext = if (format == "png") "png" else "jpg"
@@ -306,7 +328,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         list.forEachIndexed { i, p ->
             busy = str.exporting(i + 1, list.size)
             val f = File(out, if (list.size == 1) "DocScan_$ts.$ext" else "DocScan_${ts}_${i + 1}.$ext")
-            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.clarity)
+            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx))
             files.add(f)
         }
         return files

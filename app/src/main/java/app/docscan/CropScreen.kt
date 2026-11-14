@@ -1,6 +1,17 @@
 package app.docscan
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -38,9 +49,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -96,11 +112,28 @@ private fun CropBody(vm: AppVM, page: Page) {
     var active by remember { mutableIntStateOf(-1) }
     val drag = remember { DragState() }
 
+    // animations: a scanning light while the page is being searched, corners that glide to the page, a pulse when found
+    val inf = rememberInfiniteTransition(label = "crop")
+    val scan by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1500, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "scan")
+    val ants by inf.animateFloat(0f, 36f, infiniteRepeatable(tween(700, easing = LinearEasing)), label = "ants")
+    val breathe by inf.animateFloat(0.35f, 1f, infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "breathe")
+    val found = remember { Animatable(0f) }
+
     suspend fun runDetect() {
         sure = null
         val d = try { Engine.detect(page.work) } catch (e: Exception) { null }
-        if (d != null && !touched) { quad.clear(); quad.addAll(d.quad) }
+        if (d != null && !touched) {
+            // the four corners glide from where they are to the page that was found
+            val from = quad.toList()
+            if (from.size == 4) {
+                animate(0f, 1f, animationSpec = tween(700, easing = FastOutSlowInEasing)) { t, _ ->
+                    if (!touched) for (i in 0 until 4) quad[i] = lerp(from[i], d.quad[i], t)
+                }
+            }
+            if (!touched) { quad.clear(); quad.addAll(d.quad) }
+        }
         sure = d?.sure ?: false
+        if (d != null) { found.snapTo(1f); found.animateTo(0f, tween(900)) }
     }
 
     LaunchedEffect(page.id) {
@@ -125,20 +158,25 @@ private fun CropBody(vm: AppVM, page: Page) {
             Spacer(Modifier.weight(1f))
             Spacer(Modifier.width(64.dp))
         }
-        // status banner
+        // status banner (colour and text change smoothly)
+        val bannerColor by animateColorAsState(
+            when (sure) { null -> Color(0xFF1F2937); true -> Color(0xFF064E3B); false -> Color(0xFF78350F) },
+            tween(450), label = "banner",
+        )
         Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = when (sure) { null -> Color(0xFF1F2937); true -> Color(0xFF064E3B); false -> Color(0xFF78350F) },
+            shape = RoundedCornerShape(14.dp), color = bannerColor,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         ) {
-            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (sure == null) {
-                    CircularProgressIndicator(Modifier.padding(end = 10.dp).height(18.dp).width(18.dp), strokeWidth = 2.dp, color = Color.White)
+            Crossfade(sure, animationSpec = tween(350), label = "bannerText") { st ->
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (st == null) {
+                        ScanningDoc(Modifier.padding(end = 10.dp).width(16.dp).height(22.dp), paper = Color(0xFF374151))
+                    }
+                    Text(
+                        when (st) { null -> s.cropSearching; true -> s.cropFound; false -> s.cropCheck },
+                        color = Color.White, fontSize = 13.sp,
+                    )
                 }
-                Text(
-                    when (sure) { null -> s.cropSearching; true -> s.cropFound; false -> s.cropCheck },
-                    color = Color.White, fontSize = 13.sp,
-                )
             }
         }
 
@@ -216,6 +254,33 @@ private fun CropBody(vm: AppVM, page: Page) {
                         dstSize = IntSize((page.w * scale).roundToInt(), (page.h * scale).roundToInt()),
                     )
                 }
+                val searching = sure == null
+                val teal = Color(0xFF5EEAD4)
+                if (searching && bmp != null) {
+                    // a light line sweeps over the picture, the picture corners "breathe"
+                    val iw = page.w * scale; val ih = page.h * scale
+                    clipRect(left = ox, top = oy, right = ox + iw, bottom = oy + ih) {
+                        val y = oy + ih * scan
+                        val band = ih * 0.22f
+                        drawRect(
+                            Brush.verticalGradient(listOf(Color.Transparent, Color(0x665EEAD4), Color.Transparent), startY = y - band, endY = y + band),
+                            Offset(ox, y - band), Size(iw, 2f * band),
+                        )
+                        drawLine(teal.copy(alpha = 0.35f), Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 5f)
+                        drawLine(teal, Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 1.3f)
+                    }
+                    val bl = min(iw, ih) * 0.09f
+                    val bc = teal.copy(alpha = breathe)
+                    val bs = stroke * 2.2f
+                    val cs4 = listOf(
+                        Offset(ox, oy) to (1f to 1f), Offset(ox + iw, oy) to (-1f to 1f),
+                        Offset(ox + iw, oy + ih) to (-1f to -1f), Offset(ox, oy + ih) to (1f to -1f),
+                    )
+                    for ((p0, dd) in cs4) {
+                        drawLine(bc, p0, Offset(p0.x + dd.first * bl, p0.y), strokeWidth = bs, cap = StrokeCap.Round)
+                        drawLine(bc, p0, Offset(p0.x, p0.y + dd.second * bl), strokeWidth = bs, cap = StrokeCap.Round)
+                    }
+                }
                 if (quad.size == 4) {
                     val pts = quad.map { toScreen(it) }
                     val path = Path().apply {
@@ -223,18 +288,26 @@ private fun CropBody(vm: AppVM, page: Page) {
                         for (i in 1 until 4) lineTo(pts[i].x, pts[i].y)
                         close()
                     }
-                    drawPath(path, Color(0x334F46E5))
-                    drawPath(path, Color(0xFF5EEAD4), style = Stroke(width = stroke))
-                    for (k in 0 until 4) {
-                        val m = toScreen(mid(k))
-                        val r = if (active == 4 + k) sq * 1.5f else sq
-                        drawRect(Color.White, Offset(m.x - r, m.y - r), Size(2 * r, 2 * r))
-                        drawRect(Color(0xFF4F46E5), Offset(m.x - r, m.y - r), Size(2 * r, 2 * r), style = Stroke(width = stroke * 0.8f))
-                    }
-                    for (i in 0 until 4) {
-                        val r = if (active == i) cr * 1.5f else cr
-                        drawCircle(Color.White, r, pts[i])
-                        drawCircle(Color(0xFF4F46E5), r, pts[i], style = Stroke(width = stroke))
+                    if (searching && !touched) {
+                        // still searching: marching dashes around the whole picture
+                        drawPath(path, teal.copy(alpha = 0.55f), style = Stroke(width = stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 14f), ants)))
+                    } else {
+                        drawPath(path, Color(0x334F46E5))
+                        drawPath(path, teal, style = Stroke(width = stroke))
+                        if (found.value > 0.01f) {          // the page was found: one glowing pulse around it
+                            drawPath(path, teal.copy(alpha = 0.55f * found.value), style = Stroke(width = stroke * (1f + 7f * found.value)))
+                        }
+                        for (k in 0 until 4) {
+                            val m = toScreen(mid(k))
+                            val r = if (active == 4 + k) sq * 1.5f else sq
+                            drawRect(Color.White, Offset(m.x - r, m.y - r), Size(2 * r, 2 * r))
+                            drawRect(Color(0xFF4F46E5), Offset(m.x - r, m.y - r), Size(2 * r, 2 * r), style = Stroke(width = stroke * 0.8f))
+                        }
+                        for (i in 0 until 4) {
+                            val r = (if (active == i) cr * 1.5f else cr) * (1f + 0.35f * found.value)
+                            drawCircle(Color.White, r, pts[i])
+                            drawCircle(Color(0xFF4F46E5), r, pts[i], style = Stroke(width = stroke))
+                        }
                     }
                 }
             }

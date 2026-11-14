@@ -28,6 +28,12 @@ class Str(
     val updDownloading: String, val updCheck: String, val updUpToDate: String, val updAuto: String,
     val updAutoSub: String, val updVersion: (Int) -> String, val updDev: String, val updTitle: String,
     val updPermTitle: String, val updPermText: String, val updOpenSettings: String,
+    val tabEffect: String, val tabLayout: String, val fVivid: String,
+    val pageNumber: String, val numOff: String, val numPosLabel: String, val numSizeLabel: String, val numFont: String,
+    val posName: (String) -> String,
+    val previewCaption: String, val enhancing: String, val applyingEffect: String,
+    val clarityHintOrig: String, val vividHint: String,
+    val credit: String, val aboutTitle: String, val aboutText: String,
 )
 
 val Bn = Str(
@@ -71,6 +77,15 @@ val Bn = Str(
     updPermTitle = "ইনস্টলের অনুমতি দিন",
     updPermText = "আপডেট নামানো হয়েছে। ইনস্টল করতে অ্যান্ড্রয়েড একবার অনুমতি চাইবে: পরের পর্দায় অনুমতি চালু করে পেছনে ফিরে আসুন।",
     updOpenSettings = "অনুমতির পর্দা খুলুন",
+    tabEffect = "ইফেক্ট", tabLayout = "পাতা ও নম্বর", fVivid = "উজ্জ্বল",
+    pageNumber = "পাতা নম্বর", numOff = "নেই", numPosLabel = "নম্বর কোথায় বসবে", numSizeLabel = "নম্বরের সাইজ",
+    numFont = "ফন্ট: Times New Roman",
+    posName = { when (it) { "tl" -> "উপরে বাঁয়ে"; "tc" -> "উপরে মাঝে"; "tr" -> "উপরে ডানে"; "bl" -> "নিচে বাঁয়ে"; "bc" -> "নিচে মাঝে"; "br" -> "নিচে ডানে"; else -> "নেই" } },
+    previewCaption = "সেভ করার পর এভাবে দেখাবে", enhancing = "লেখা পরিষ্কার হচ্ছে…", applyingEffect = "ইফেক্ট বসছে…",
+    clarityHintOrig = "ছবির রং ও কাগজ একই থাকবে, শুধু লেখা আরও স্পষ্ট হবে (0 = কোনো পরিবর্তন নেই)",
+    vividHint = "রঙিন ছবির জন্য: আলো সমান হবে, রং উজ্জ্বল ও ছবি ধারালো হবে, রং নষ্ট হবে না",
+    credit = "তৈরি করেছেন ইমরানুল হক সাব্বির", aboutTitle = "অ্যাপ সম্পর্কে",
+    aboutText = "DocScan: কাগজের ছবি তুলুন, কেটে সোজা করুন, লেখা পরিষ্কার করুন, তারপর PDF বা ছবি হিসেবে সেভ করুন।",
 )
 
 val En = Str(
@@ -115,6 +130,15 @@ val En = Str(
     updPermTitle = "Allow the install",
     updPermText = "The update is downloaded. Android asks once for permission to install it: switch it on on the next screen, then come back.",
     updOpenSettings = "Open the permission screen",
+    tabEffect = "Effect", tabLayout = "Page & number", fVivid = "Vivid",
+    pageNumber = "Page number", numOff = "Off", numPosLabel = "Where the number goes", numSizeLabel = "Number size",
+    numFont = "Font: Times New Roman",
+    posName = { when (it) { "tl" -> "Top left"; "tc" -> "Top center"; "tr" -> "Top right"; "bl" -> "Bottom left"; "bc" -> "Bottom center"; "br" -> "Bottom right"; else -> "Off" } },
+    previewCaption = "How it will look when saved", enhancing = "Making the text clearer…", applyingEffect = "Applying the effect…",
+    clarityHintOrig = "Colours and paper stay as photographed, only the writing gets clearer (0 = no change)",
+    vividHint = "For colour pictures: even light, richer colours, sharper picture, colours are kept natural",
+    credit = "Made by Imranul Hoque Sabbir", aboutTitle = "About",
+    aboutText = "DocScan: photograph a paper, crop and straighten it, make the text clear, then save it as PDF or pictures.",
 )
 
 val LocalStr = staticCompositionLocalOf { Bn }

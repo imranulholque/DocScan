@@ -51,12 +51,16 @@ object Engine {
         py { mod.callAttr("thumbs", path, prefix, clarity.toDouble()) }
     }
 
-    suspend fun exportImage(path: String, dst: String, fmt: String, mode: String, clarity: Int) {
-        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble()) }
+    /** number = page number to print (used when numPos is not "off"), numPos = off | tl tc tr bl bc br. */
+    suspend fun exportImage(
+        path: String, dst: String, fmt: String, mode: String, clarity: Int,
+        number: Int, numPos: String, numSize: Int, fontPath: String,
+    ) {
+        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble(), number, numPos, numSize.toDouble(), fontPath) }
     }
 
-    suspend fun makePdf(pages: List<Triple<String, String, Int>>, dst: String, pageSize: String) {
+    suspend fun makePdf(pages: List<Triple<String, String, Int>>, dst: String, pageSize: String, numPos: String, numSize: Int) {
         val lines = pages.joinToString("\n") { "${it.first}|${it.second}|${it.third}" }
-        py { mod.callAttr("make_pdf", lines, dst, pageSize) }
+        py { mod.callAttr("make_pdf", lines, dst, pageSize, numPos, numSize.toDouble()) }
     }
 }
