@@ -26,7 +26,7 @@ object PageFinder {
 
     private class Pt(val x: Double, val y: Double)
     private class Pic(val w: Int, val h: Int, val r: FloatArray, val g: FloatArray, val b: FloatArray)
-    private class Cand(val q: List<Pt>, val fill: Double, val frac: Double, val score: Double)
+    private class Cand(val q: List<Pt>, val fill: Double, val frac: Double, val score: Double, val con: Double)
     private class Hit(val x: Double, val y: Double, val t: Double, val s: Double)
     private class Ln(val x: Double, val y: Double, val dx: Double, val dy: Double, val n: Int)
 
@@ -309,7 +309,7 @@ object PageFinder {
             val lab = blob.first
             val cnt2 = blob.second
             val frac = cnt2.toDouble() / n
-            if (frac < 0.08 || frac > 0.985) continue
+            if (frac < 0.015 || frac > 0.985) continue
             val pts = ArrayList<Pt>()
             var cx = 0.0; var cy = 0.0
             for (y in 0 until h) for (x in 0 until w) {
@@ -331,12 +331,17 @@ object PageFinder {
             if (fill < 0.7 || fill > 1.25) continue
             val centre = 1 - 0.5 * hypot(cx - w / 2.0, cy - h / 2.0) / hypot(w / 2.0, h / 2.0)
             val con = sideContrast(chb, w, h, q)
-            cands.add(Cand(q, fill, frac, con * sqrt(frac) * sqrt(centre) * min(1.0, fill)))
+            cands.add(Cand(q, fill, frac, con * sqrt(frac) * sqrt(centre) * min(1.0, fill), con))
         }
         return cands
     }
 
-    private fun coarseQuad(pic: Pic): Cand? = coarseCands(pic).maxByOrNull { it.score }
+    private fun coarseQuad(pic: Pic): Cand? {
+        val all = coarseCands(pic)
+        // big candidates (>= 15%) behave exactly as before; small ones are only a fallback
+        val big = all.filter { it.frac >= 0.15 }.maxByOrNull { it.score }
+        return big ?: all.maxByOrNull { it.score }
+    }
 
     // ------------------------------------------------------------------ straight-edge refinement
     private fun refineQuad(pic: Pic, q0: List<Pt>, rounds: Int): Pair<List<Pt>, Int> {
@@ -436,7 +441,7 @@ object PageFinder {
         }
         val k = fine.w.toDouble() / small.w
         var q = best.q.map { Pt(it.x * k, it.y * k) }
-        val found = best.fill > 0.82 && best.frac > 0.15
+        val found = best.fill > 0.82 && (best.frac > 0.15 || (best.frac > 0.02 && best.con > 25.0))
         try {
             val r = refineQuad(fine, q, rounds)
             if (r.second > 0) q = r.first
@@ -499,6 +504,6 @@ object PageFinder {
         val cy = pts.sumOf { it.y } / 4.0
         pts = pts.map { Pt(cx + (it.x - cx) * 0.995, cy + (it.y - cy) * 0.995) }
         val area = polyArea(pts)
-        return (found && area >= 0.08 * W * H) to pts.map { Offset(it.x.toFloat(), it.y.toFloat()) }
+        return (found && area >= 0.015 * W * H) to pts.map { Offset(it.x.toFloat(), it.y.toFloat()) }
     }
 }
