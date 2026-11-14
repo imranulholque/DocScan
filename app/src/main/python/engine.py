@@ -1,4 +1,4 @@
-"""DocScan engine: thin wrapper around the tested Image Fixer code (core.py, scanner.py - copied unchanged).
+"""DocScanner engine: thin wrapper around the tested Image Fixer code (core.py, scanner.py - copied unchanged).
 The Android app calls these functions through Chaquopy. Everything goes through files and plain strings."""
 import core
 import scanner
@@ -18,7 +18,7 @@ except Exception:
 NUM_MARGIN = 28.0            # page number distance from the page edge (PDF points, about 1 cm)
 NUM_DIGIT_H = 0.676          # height of a Times digit (em)
 NUM_DIGIT_W = 0.5            # width of a Times digit (em)
-CREDIT = "DocScan - Imranul Hoque Sabbir"
+CREDIT = "DocScanner - Imranul Hoque Sabbir"
 
 AUTO_OK_SCORE = 0.6          # same thresholds as the PC program's Auto crop
 AUTO_OK_EDGE = 0.6
@@ -95,6 +95,29 @@ def _inset(quad, k=0.005):
     cy = sum(p[1] for p in quad) / 4.0
     return [(cx + (x - cx) * (1.0 - k), cy + (y - cy) * (1.0 - k)) for x, y in quad]
 
+
+
+def live(rgb, w, h):
+    """Live camera outline: the same fast OpenCV page finder, run on a small camera frame (raw RGB bytes, w x h, upright).
+    Returns '' when no page is seen, else 'x0,y0,x1,y1,x2,y2,x3,y3' (TL,TR,BR,BL) as fractions 0..1 of the frame."""
+    if scanner.cv2 is None:
+        return ""
+    try:
+        try:                                           # a Java byte[] arrives as a signed buffer: read the raw bytes
+            raw = memoryview(rgb).cast("B").tobytes()
+        except Exception:
+            raw = bytes(rgb)
+        im = Image.frombytes("RGB", (int(w), int(h)), raw)
+        res = scanner._detect_fast(im)
+    except Exception:
+        return ""
+    if res is None:
+        return ""
+    quad, found, info = res
+    area = abs(sum(quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1] for i in range(4))) / 2.0
+    if info.get("score", 0) < 0.35 or area < 0.06 * w * h:
+        return ""
+    return ",".join("%.4f" % v for x, y in quad for v in (x / float(w), y / float(h)))
 
 def crop(path, quad_csv, dst):
     """Cut the paper out and remove the camera angle (scanner.straighten). Returns 'w,h'."""

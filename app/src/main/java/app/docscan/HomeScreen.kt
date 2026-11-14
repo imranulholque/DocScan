@@ -63,7 +63,7 @@ fun HomeScreen(vm: AppVM) {
             .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("DocScan", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = cs.primary, modifier = Modifier.weight(1f))
+            Text("DocScanner", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = cs.primary, modifier = Modifier.weight(1f))
             TextButton(onClick = { vm.chooseLang(if (vm.lang == "bn") "en" else "bn") }) {
                 Text(if (vm.lang == "bn") "English" else "বাংলা", fontWeight = FontWeight.SemiBold)
             }

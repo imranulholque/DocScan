@@ -124,7 +124,7 @@ fun SettingsScreen(vm: AppVM) {
             SectionLabel(s.aboutTitle)
             Surface(shape = RoundedCornerShape(14.dp), color = cs.surfaceVariant) {
                 Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text("DocScan", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = cs.primary)
+                    Text("DocScanner", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = cs.primary)
                     Spacer(Modifier.height(4.dp))
                     Text(s.aboutText, fontSize = 13.sp, color = cs.onSurfaceVariant)
                     Spacer(Modifier.height(10.dp))

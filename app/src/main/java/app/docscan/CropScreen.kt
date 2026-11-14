@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
@@ -68,6 +70,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
@@ -128,8 +131,8 @@ private fun CropBody(vm: AppVM, page: Page) {
     val found = remember { Animatable(0f) }
     val enter = remember { Animatable(0f) }          // the whole screen glides in (no hard jump from the camera)
     val picIn = remember { Animatable(0f) }          // the picture fades in as soon as it is decoded
-    LaunchedEffect(Unit) { enter.animateTo(1f, tween(320, easing = FastOutSlowInEasing)) }
-    LaunchedEffect(bmp) { if (bmp != null) picIn.animateTo(1f, tween(260)) }
+    LaunchedEffect(Unit) { atFullSpeed { enter.animateTo(1f, tween(320, easing = FastOutSlowInEasing)) } }
+    LaunchedEffect(bmp) { if (bmp != null) atFullSpeed { picIn.animateTo(1f, tween(260)) } }
 
     suspend fun runDetect() {
         sure = null
@@ -138,14 +141,16 @@ private fun CropBody(vm: AppVM, page: Page) {
             // the four corners glide from where they are to the page that was found
             val from = quad.toList()
             if (from.size == 4) {
-                animate(0f, 1f, animationSpec = tween(700, easing = FastOutSlowInEasing)) { t, _ ->
-                    if (!touched) for (i in 0 until 4) quad[i] = lerp(from[i], d.quad[i], t)
+                atFullSpeed {
+                    animate(0f, 1f, animationSpec = tween(700, easing = FastOutSlowInEasing)) { t, _ ->
+                        if (!touched) for (i in 0 until 4) quad[i] = lerp(from[i], d.quad[i], t)
+                    }
                 }
             }
             if (!touched) { quad.clear(); quad.addAll(d.quad) }
         }
         sure = d?.sure ?: false
-        if (d != null) { found.snapTo(1f); found.animateTo(0f, tween(900)) }
+        if (d != null) { found.snapTo(1f); atFullSpeed { found.animateTo(0f, tween(900)) } }
     }
 
     LaunchedEffect(page.id) {
@@ -156,10 +161,25 @@ private fun CropBody(vm: AppVM, page: Page) {
             quad.addAll(fullFrame(page.w, page.h))
             manual = true; sure = false
         } else {
-            quad.addAll(fullFrame(page.w, page.h))
+            // coming from the camera: the corners start where the live outline saw the page, then glide to the exact page
+            val hint = vm.takeLiveHint(page.id)
+            if (hint != null) quad.addAll(hint.map { Offset(it.x * page.w, it.y * page.h) }) else quad.addAll(fullFrame(page.w, page.h))
             runDetect()
         }
     }
+
+    // right after the shutter: tell the person the picture is safe, so the phone can be moved away at once
+    val fromShutter = remember { vm.cropFromShutter }
+    val born = remember { System.currentTimeMillis() }
+    var holdCard by remember { mutableStateOf(fromShutter) }
+    LaunchedEffect(sure, manual) {
+        if (holdCard && (sure != null || manual)) {
+            val wait = 1500L - (System.currentTimeMillis() - born)
+            if (wait > 0) delay(wait)
+            holdCard = false
+        }
+    }
+    val searching = sure == null && !manual
 
     val leave = { vm.nextCrop(discard = true) }
     BackHandler { leave() }
@@ -176,22 +196,19 @@ private fun CropBody(vm: AppVM, page: Page) {
             Spacer(Modifier.weight(1f))
             Spacer(Modifier.width(64.dp))
         }
-        // status banner (colour and text change smoothly)
-        val bannerColor by animateColorAsState(
-            when (sure) { null -> Color(0xFF1F2937); true -> Color(0xFF064E3B); false -> Color(0xFF78350F) },
-            tween(450), label = "banner",
+        // status banner: stays invisible while the page is being searched (the "Auto cropping" card sits on the picture), then fades in
+        val bannerColor = animateColorAlways(
+            when (sure) { null -> Color(0xFF1F2937); true -> Color(0xFF064E3B); false -> Color(0xFF78350F) }, 450,
         )
+        val bannerAlpha by animateFloatAlways(if (sure == null) 0f else 1f, tween(320), "bannerAlpha")
         Surface(
             shape = RoundedCornerShape(14.dp), color = bannerColor,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 58.dp).graphicsLayer { alpha = bannerAlpha },
         ) {
-            Crossfade(sure, animationSpec = tween(350), label = "bannerText") { st ->
-                Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (st == null) {
-                        ScanningDoc(Modifier.padding(end = 10.dp).width(16.dp).height(22.dp), paper = Color(0xFF374151))
-                    }
+            FadeSwap(sure, 200) { st ->
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp).heightIn(min = 38.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        when (st) { null -> s.cropSearching; true -> s.cropFound; false -> if (manual) s.cropManual else s.cropCheck },
+                        when (st) { null -> ""; true -> s.cropFound; false -> if (manual) s.cropManual else s.cropCheck },
                         color = Color.White, fontSize = 13.sp,
                     )
                 }
@@ -348,6 +365,27 @@ private fun CropBody(vm: AppVM, page: Page) {
                             val r = (if (active == i) cr * 1.5f else cr) * (1f + 0.35f * found.value)
                             drawCircle(Color.White, r, pts[i])
                             drawCircle(Color(0xFF4F46E5), r, pts[i], style = Stroke(width = stroke))
+                        }
+                    }
+                }
+            }
+            // "Auto cropping..." (+ "photo taken") floats in the middle of the picture while the page is searched
+            PopVisible(
+                visible = if (fromShutter) holdCard else searching,
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Surface(shape = RoundedCornerShape(22.dp), color = Color(0xE6111827), shadowElevation = 8.dp) {
+                    Column(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (fromShutter) {
+                            Text("✓  " + s.camTaken, color = Color(0xFF5EEAD4), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(s.camMoveAway, color = Color(0xCCFFFFFF), fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                        }
+                        if (searching) {
+                            Row(Modifier.padding(top = if (fromShutter) 12.dp else 0.dp), verticalAlignment = Alignment.CenterVertically) {
+                                ScanningDoc(Modifier.size(20.dp, 28.dp), paper = Color(0xFF374151))
+                                Spacer(Modifier.width(12.dp))
+                                Text(s.cropSearching, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                            }
                         }
                     }
                 }

@@ -1,4 +1,4 @@
-# DocScan
+# DocScanner
 
 *Made by **Imranul Hoque Sabbir** (ইমরানুল হক সাব্বির).*
 
@@ -19,26 +19,32 @@ The scanning engine is the **Image Fixer** code, unchanged (`core.py`, `scanner.
   The page above shows the result live: paper shape, where the picture sits and the number. PDF numbers are real **bold** text in Times-Bold;
   pictures (JPG/PNG) use the bundled Liberation Serif Bold (Times New Roman Bold look, same widths, SIL OFL licence) from `assets/fonts`.
   One switch turns numbers on; then pick top/bottom + left/center/right and a size. The preview marks the number with a blue box.
+- **Live camera**: while you aim, the page outline is drawn on the camera view (everything outside the page is darkened, 4 corner brackets, green when the shot is good)
+  and short messages tell what to do (move back / closer / left / right / hold the phone flatter / hold still). After the shutter the crop screen opens at once,
+  starts from that outline, and says "photo taken, you can move the phone away". "Auto cropping…" floats in the middle of the picture while the page is searched.
+- **Review screen**: press and hold a thumbnail, then drag left / right to change the page order (a small line under the thumbnails says so).
+  **Retake** replaces the current page with a new photo (camera or gallery) in exactly the same place, keeping its look.
+- **Animations always play**, even when the phone's animations are off (Developer options, Battery saver): see `FullSpeed` / `atFullSpeed` / `animateFloatAlways` in `Common.kt`.
 - Photos open the crop screen instantly: the picture is prepared natively (no Python), then the page finder runs with a visible scanning animation.
 
 ## Build the APK on GitHub (no Android Studio needed)
 1. Create a repository, upload everything in this folder (keep the `keystore` folder), commit to `main`.
 2. Open **Actions → Build Android APK**. It runs by itself on every push (or press *Run workflow*). It takes about 10-15 minutes.
-3. Open the finished run: download **DocScan-apk**, or open **Releases** on your phone and download `DocScan.apk`.
+3. Open the finished run: download **DocScanner-apk**, or open **Releases** on your phone and download `DocScanner.apk`.
 4. Install it (allow "install unknown apps" for your browser once).
 
 Each build number is higher than the one before, so a new APK installs over the old one and keeps the settings.
 
 ## Auto update
 Works like Image Fixer's updater, with the same rules:
-- The GitHub build publishes every build as a Release `build-<number>` with `DocScan.apk`, and writes the build number and the
+- The GitHub build publishes every build as a Release `build-<number>` with `DocScanner.apk` (plus an identical `DocScan.apk` so copies installed before the rename can still update), and writes the build number and the
   repository name into the app (`BuildConfig.BUILD`, `BuildConfig.REPO`) while building. Nothing to configure.
 - The app asks `https://api.github.com/repos/<repo>/releases/latest` a few seconds after it starts, then every 10 minutes while it is open.
   A newer build shows a card on the Home screen and a question ("Update now?") with the commit message as "what is new".
 - Update = download, size + SHA-256 check, Android's installer opens, tap **Install**. Settings stay (same package, same signing key).
   The first time, Android asks once to allow this app to install apps.
 - Settings → Updates: switch auto update off, see the build number, or press "Check for updates".
-- The repository must be **public** (the app asks GitHub without a login), and this repository should publish only DocScan releases.
+- The repository must be **public** (the app asks GitHub without a login), and this repository should publish only DocScanner releases.
 - The very first install is by hand; automatic updates start from the build that contains this feature.
 - A copy built on your own computer has no build number: it never offers updates.
 

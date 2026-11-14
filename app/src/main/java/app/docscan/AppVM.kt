@@ -124,6 +124,33 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var busy by mutableStateOf<String?>(null)
     var saved by mutableStateOf<Saved?>(null)
 
+    // ------------------------------------------------------------ camera -> crop hand-over, and "Retake"
+    /** The first page in the crop queue was just taken with the shutter (the crop screen then says "photo taken, move the phone away"). */
+    var cropFromShutter by mutableStateOf(false)
+        private set
+    private var liveHintId: String? = null
+    private var liveHint: List<Offset>? = null
+
+    /** Where the live camera saw the page (fractions 0..1) when the shutter was pressed: the crop screen's corners start there. */
+    fun takeLiveHint(id: String): List<Offset>? {
+        val h = if (liveHintId == id) liveHint else null
+        liveHint = null; liveHintId = null
+        return h
+    }
+
+    /** Retake: the page that the next photo (camera or gallery) will replace, in exactly the same place. */
+    var retakeId by mutableStateOf<String?>(null)
+    private var replace: Pair<String, String>? = null          // (new page id, old page id)
+
+    fun startRetake(id: String) { retakeId = id; screen = Screen.Camera }
+    fun cancelRetake() { retakeId = null }
+
+    /** A shutter photo became page [id]. */
+    fun photoTaken(id: String, hint: List<Offset>?) {
+        liveHint = hint; liveHintId = id
+        retakeId?.let { replace = id to it }
+    }
+
     private val sessionDir = File(ctx.filesDir, "session").apply { deleteRecursively(); mkdirs() }
 
     // ------------------------------------------------------------ auto update (see Updater.kt)
@@ -252,7 +279,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 if (id == null) continue
                 if (first) {
                     first = false
-                    current = pages.indexOfFirst { it.id == id }
+                    retakeId?.let { replace = id to it }
+                    if (replace?.first != id) current = pages.indexOfFirst { it.id == id }
                     queueCrop(listOf(id), Screen.Review)
                 } else {
                     cropQueue = cropQueue + id
@@ -265,7 +293,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     // ------------------------------------------------------------ cropping
-    fun queueCrop(ids: List<String>, back: Screen) { cropQueue = ids; cropReturn = back; screen = Screen.Crop }
+    fun queueCrop(ids: List<String>, back: Screen, fromShutter: Boolean = false) {
+        cropQueue = ids; cropReturn = back; cropFromShutter = fromShutter; screen = Screen.Crop
+    }
 
     fun recrop(id: String) = queueCrop(listOf(id), Screen.Review)
 
@@ -275,6 +305,21 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         Engine.crop(p.work, quad, dst)
         del(p.cropped); del(p.prev)
         upd(id) { it.copy(cropped = dst, quad = quad, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
+        replace?.let { (newId, oldId) -> if (newId == id) swapIn(newId, oldId) }
+    }
+
+    /** Retake: the new page takes the old page's place (same position, same look), the old page is gone. */
+    private fun swapIn(newId: String, oldId: String) {
+        replace = null
+        val ni = pages.indexOfFirst { it.id == newId }
+        val oldPage = page(oldId)
+        if (ni < 0 || oldPage == null) return
+        val np = pages.removeAt(ni).copy(mode = oldPage.mode, clarity = oldPage.clarity, oClarity = oldPage.oClarity)
+        val oi = pages.indexOfFirst { it.id == oldId }
+        if (oi < 0) { pages.add(ni.coerceAtMost(pages.size), np); return }
+        pages[oi] = np
+        del(oldPage.work); del(oldPage.cropped); del(oldPage.prev)
+        current = oi
     }
 
     /** The page being cropped is done (or discarded): go on with the queue. */
@@ -285,6 +330,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             if (p != null && p.cropped == null) { del(p.work); pages.removeAll { it.id == id } }
         }
         cropQueue = cropQueue.drop(1)
+        cropFromShutter = false
         finishCropIfDone()
     }
 
@@ -292,6 +338,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun finishCropIfDone() {
         if (screen != Screen.Crop || cropQueue.isNotEmpty() || importing > 0) return
         val back = cropReturn
+        replace = null; retakeId = null
         screen = if (back == Screen.Review && pages.none { it.cropped != null }) Screen.Home else back
         if (screen == Screen.Review) current = current.coerceIn(0, max(0, pages.size - 1))
     }
@@ -369,6 +416,14 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (pages.isEmpty()) screen = Screen.Home
     }
 
+    /** Drag and drop in the thumbnail strip: the page [from] goes to place [to]; it stays the selected page. */
+    fun moveTo(from: Int, to: Int) {
+        if (from !in pages.indices || to !in pages.indices || from == to) return
+        val p = pages.removeAt(from)
+        pages.add(to, p)
+        current = to
+    }
+
     fun move(index: Int, by: Int) {
         val to = index + by
         if (index !in pages.indices || to !in pages.indices) return
@@ -392,7 +447,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val list = pages.filter { it.cropped != null }
         if (format == "pdf") {
             busy = str.processing
-            val f = File(out, "DocScan_$ts.pdf")
+            val f = File(out, "DocScanner_$ts.pdf")
             Engine.makePdf(list.map { Triple(it.cropped!!, it.mode, it.eff) }, f.absolutePath, size, numPos, numSize)
             return listOf(f)
         }
@@ -400,7 +455,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val files = ArrayList<File>()
         list.forEachIndexed { i, p ->
             busy = str.exporting(i + 1, list.size)
-            val f = File(out, if (list.size == 1) "DocScan_$ts.$ext" else "DocScan_${ts}_${i + 1}.$ext")
+            val f = File(out, if (list.size == 1) "DocScanner_$ts.$ext" else "DocScanner_${ts}_${i + 1}.$ext")
             Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx))
             files.add(f)
         }

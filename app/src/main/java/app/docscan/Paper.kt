@@ -1,7 +1,6 @@
 package app.docscan
 
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -100,16 +99,16 @@ fun PaperPreview(
     val tw = text.length * Paper.DIGIT_W * numSize
     val target = Paper.numXY(if (pos == "off") "bc" else pos, numSize.toFloat(), g.pw, g.ph, tw)
     val spec = tween<Float>(450, easing = FastOutSlowInEasing)
-    val pw by animateFloatAsState(g.pw, spec, label = "pw")
-    val ph by animateFloatAsState(g.ph, spec, label = "ph")
-    val ix by animateFloatAsState(g.x, spec, label = "ix")
-    val iy by animateFloatAsState(g.y, spec, label = "iy")
-    val idw by animateFloatAsState(g.dw, spec, label = "idw")
-    val idh by animateFloatAsState(g.dh, spec, label = "idh")
-    val nx by animateFloatAsState(target.first, spec, label = "nx")
-    val ny by animateFloatAsState(target.second, spec, label = "ny")
-    val ns by animateFloatAsState(numSize.toFloat(), spec, label = "ns")
-    val na by animateFloatAsState(if (pos == "off") 0f else 1f, tween(250), label = "na")
+    val pw by animateFloatAlways(g.pw, spec, label = "pw")
+    val ph by animateFloatAlways(g.ph, spec, label = "ph")
+    val ix by animateFloatAlways(g.x, spec, label = "ix")
+    val iy by animateFloatAlways(g.y, spec, label = "iy")
+    val idw by animateFloatAlways(g.dw, spec, label = "idw")
+    val idh by animateFloatAlways(g.dh, spec, label = "idh")
+    val nx by animateFloatAlways(target.first, spec, label = "nx")
+    val ny by animateFloatAlways(target.second, spec, label = "ny")
+    val ns by animateFloatAlways(numSize.toFloat(), spec, label = "ns")
+    val na by animateFloatAlways(if (pos == "off") 0f else 1f, tween(250), label = "na")
 
     Canvas(modifier.fillMaxSize()) {
         val pad = 10f
@@ -159,8 +158,8 @@ fun NumberSpotPicker(pos: String, onPick: (String) -> Unit, modifier: Modifier =
     }
     // smooth movement of the chosen box
     val target = center(if (pos == "off") "bc" else pos, 1f, 1f)
-    val px by animateFloatAsState(target.x, tween(220, easing = FastOutSlowInEasing), label = "px")
-    val py by animateFloatAsState(target.y, tween(220, easing = FastOutSlowInEasing), label = "py")
+    val px by animateFloatAlways(target.x, tween(220, easing = FastOutSlowInEasing), label = "px")
+    val py by animateFloatAlways(target.y, tween(220, easing = FastOutSlowInEasing), label = "py")
     Canvas(
         modifier.size(84.dp, 112.dp).pointerInput(Unit) {
             detectTapGestures { off ->

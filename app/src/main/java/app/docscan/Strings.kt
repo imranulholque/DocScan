@@ -37,6 +37,12 @@ class Str(
     val previewCaption: String, val enhancing: String, val applyingEffect: String,
     val clarityHintOrig: String, val vividHint: String, val strength: String,
     val credit: String, val aboutTitle: String, val aboutText: String,
+    val camTaken: String, val camMoveAway: String,
+    val liveLooking: String, val liveLookingSub: String, val liveBack: String, val liveBackSub: String,
+    val liveCloser: String, val liveCloserSub: String, val liveMove: (String) -> String, val liveCenterSub: String,
+    val liveFlat: String, val liveFlatSub: String, val liveGood: String, val liveGoodSub: String,
+    val liveAlmost: String, val liveAlmostSub: String,
+    val retake: String, val retaking: (Int) -> String, val reorderHint: String, val reorderDrop: String,
 )
 
 val Bn = Str(
@@ -64,7 +70,7 @@ val Bn = Str(
     save = "সেভ", share = "শেয়ার", saveTitle = "সেভ করুন", shareTitle = "শেয়ার করুন",
     format = "ফরম্যাট", pdfSize = "PDF পাতার মাপ", sizeFit = "ছবির মাপ", sizeA4 = "A4",
     location = "কোথায় সেভ হবে", change = "বদলান", reset = "ডিফল্ট",
-    defaultLoc = "ডিফল্ট: ছবি → Pictures/DocScan, PDF → Documents/DocScan",
+    defaultLoc = "ডিফল্ট: ছবি → Pictures/DocScanner, PDF → Documents/DocScanner",
     working = "কাজ চলছে…", processing = "ছবি তৈরি হচ্ছে…",
     exporting = { i, n -> "পাতা $i / $n তৈরি হচ্ছে…" },
     savedTitle = "সেভ হয়েছে ✓", savedTo = { "জায়গা: $it" }, newScan = "নতুন স্ক্যান",
@@ -94,7 +100,18 @@ val Bn = Str(
     clarityHintOrig = "ছবির রং ও কাগজ একই থাকবে, শুধু লেখা আরও স্পষ্ট হবে (0 = কোনো পরিবর্তন নেই)",
     strength = "ইফেক্ট কম-বেশি", vividHint = "রঙিন ছবির জন্য: আলো সমান হবে, রং উজ্জ্বল ও ছবি ধারালো হবে, রং নষ্ট হবে না",
     credit = "তৈরি করেছেন ইমরানুল হক সাব্বির", aboutTitle = "অ্যাপ সম্পর্কে",
-    aboutText = "DocScan: কাগজের ছবি তুলুন, কেটে সোজা করুন, লেখা পরিষ্কার করুন, তারপর PDF বা ছবি হিসেবে সেভ করুন।",
+    aboutText = "DocScanner: কাগজের ছবি তুলুন, কেটে সোজা করুন, লেখা পরিষ্কার করুন, তারপর PDF বা ছবি হিসেবে সেভ করুন।",
+    camTaken = "ছবি তোলা হয়েছে", camMoveAway = "এখন ফোনটি সরিয়ে নিতে পারেন",
+    liveLooking = "কাগজ খুঁজছি…", liveLookingSub = "কাগজটি গাঢ় রঙের টেবিলে রাখুন, চারটি কোণ যেন দেখা যায়",
+    liveBack = "ফোনটি একটু পিছনে সরান", liveBackSub = "কাগজের চারটি কোণই ফ্রেমের ভেতরে থাকা চাই",
+    liveCloser = "আরও কাছে আনুন", liveCloserSub = "ফ্রেমে কাগজটি ছোট দেখাচ্ছে",
+    liveMove = { "ফোনটি একটু " + when (it) { "left" -> "বাঁয়ে"; "right" -> "ডানে"; "up" -> "উপরে"; else -> "নিচে" } + " সরান" },
+    liveCenterSub = "পুরো কাগজটি ফ্রেমের মাঝখানে রাখুন",
+    liveFlat = "ফোন কাগজের ঠিক ওপরে সোজা ধরুন", liveFlatSub = "কাগজ হেলে দেখাচ্ছে। যত সোজা, স্ক্যান তত ভালো",
+    liveGood = "ঠিক আছে, ছবি তুলুন", liveGoodSub = "ফোন স্থির রেখে গোল বোতাম চাপুন",
+    liveAlmostSub = "কাগজ ধরা পড়েছে", liveAlmost = "প্রায় হয়েছে, স্থির ধরুন",
+    retake = "আবার তুলুন", retaking = { "পাতা $it আবার তোলা হচ্ছে" },
+    reorderHint = "পাতা চেপে ধরে ডানে-বামে টানলে ক্রম বদলাবে", reorderDrop = "ইচ্ছেমতো জায়গায় এনে ছেড়ে দিন",
 )
 
 val En = Str(
@@ -123,7 +140,7 @@ val En = Str(
     save = "Save", share = "Share", saveTitle = "Save", shareTitle = "Share",
     format = "Format", pdfSize = "PDF page size", sizeFit = "Picture size", sizeA4 = "A4",
     location = "Save to", change = "Change", reset = "Default",
-    defaultLoc = "Default: pictures → Pictures/DocScan, PDF → Documents/DocScan",
+    defaultLoc = "Default: pictures → Pictures/DocScanner, PDF → Documents/DocScanner",
     working = "Working…", processing = "Making the picture…",
     exporting = { i, n -> "Making page $i / $n…" },
     savedTitle = "Saved ✓", savedTo = { "Location: $it" }, newScan = "New scan",
@@ -153,7 +170,18 @@ val En = Str(
     clarityHintOrig = "Colours and paper stay as photographed, only the writing gets clearer (0 = no change)",
     strength = "Effect strength", vividHint = "For colour pictures: even light, richer colours, sharper picture, colours are kept natural",
     credit = "Made by Imranul Hoque Sabbir", aboutTitle = "About",
-    aboutText = "DocScan: photograph a paper, crop and straighten it, make the text clear, then save it as PDF or pictures.",
+    aboutText = "DocScanner: photograph a paper, crop and straighten it, make the text clear, then save it as PDF or pictures.",
+    camTaken = "Photo taken", camMoveAway = "You can move the phone away now",
+    liveLooking = "Looking for the paper…", liveLookingSub = "Put it on a darker table and keep all 4 corners in view",
+    liveBack = "Move the phone back a little", liveBackSub = "All 4 corners of the paper must be inside the frame",
+    liveCloser = "Move closer", liveCloserSub = "The paper looks small in the frame",
+    liveMove = { "Move the phone a little " + when (it) { "left" -> "left"; "right" -> "right"; "up" -> "up"; else -> "down" } },
+    liveCenterSub = "Keep the whole paper in the middle of the frame",
+    liveFlat = "Hold the phone flat, straight above the paper", liveFlatSub = "The page looks tilted. Less tilt = a better scan",
+    liveGood = "Good, take the photo", liveGoodSub = "Hold still and tap the round button",
+    liveAlmostSub = "The paper is found", liveAlmost = "Almost, hold still…",
+    retake = "Retake", retaking = { "Retaking page $it" },
+    reorderHint = "Press and hold a page, then drag left or right to reorder", reorderDrop = "Drop it where you want it",
 )
 
 val LocalStr = staticCompositionLocalOf { Bn }

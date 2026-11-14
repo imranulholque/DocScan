@@ -13,7 +13,7 @@ import java.security.MessageDigest
 
 /**
  * Auto update, same way as Image Fixer's updater.py:
- *  - the GitHub build publishes every build as a Release called  build-<number>  with the file DocScan.apk, and
+ *  - the GitHub build publishes every build as a Release called  build-<number>  with the file DocScanner.apk (and, for copies installed before the rename, the same file as DocScan.apk), and
  *    puts the number + repository into BuildConfig (BUILD, REPO) while building;
  *  - the app asks  https://api.github.com/repos/<repo>/releases/latest  and compares the number with its own;
  *  - install = download the APK, check size + SHA-256, hand it to Android's installer (one tap on "Install").
@@ -27,7 +27,8 @@ object Updater {
 
     class UpdateError(msg: String) : Exception(msg)
 
-    const val ASSET = "DocScan.apk"
+    const val ASSET = "DocScanner.apk"
+    private const val OLD_ASSET = "DocScan.apk"          // releases made before the app was renamed to DocScanner
     private const val API = "https://api.github.com"
     private val TAG = Regex("^build-(\\d+)$")
 
@@ -43,7 +44,7 @@ object Updater {
         val assets = data.optJSONArray("assets") ?: return null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name") != ASSET) continue
+            if (a.optString("name") != ASSET && a.optString("name") != OLD_ASSET) continue
             val url = a.optString("browser_download_url")
             if (!url.startsWith("https://github.com/$repo/releases/download/")) {
                 throw UpdateError("The update has an unexpected download address.")
@@ -65,7 +66,7 @@ object Updater {
         try {
             c.connectTimeout = 15000; c.readTimeout = 15000
             c.setRequestProperty("Accept", "application/vnd.github+json")
-            c.setRequestProperty("User-Agent", "DocScan-updater")
+            c.setRequestProperty("User-Agent", "DocScanner-updater")
             val code = c.responseCode
             if (code == 404) return null              // no release published yet
             if (code != 200) throw UpdateError("GitHub answered $code.")
@@ -87,7 +88,7 @@ object Updater {
         val c = URL(info.url).openConnection() as HttpURLConnection
         try {
             c.connectTimeout = 15000; c.readTimeout = 30000
-            c.setRequestProperty("User-Agent", "DocScan-updater")
+            c.setRequestProperty("User-Agent", "DocScanner-updater")
             if (c.responseCode != 200) throw UpdateError("Download failed (${c.responseCode}).")
             val total = c.contentLengthLong.takeIf { it > 0 } ?: info.size
             val md = MessageDigest.getInstance("SHA-256")

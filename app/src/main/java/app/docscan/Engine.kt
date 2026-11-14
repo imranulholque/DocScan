@@ -16,7 +16,7 @@ object Engine {
         Thread(null, {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             r.run()
-        }, "docscan-python", 32L * 1024 * 1024)
+        }, "docscanner-python", 32L * 1024 * 1024)
     }.asCoroutineDispatcher()
     private val mod by lazy { Python.getInstance().getModule("engine") }
 
@@ -38,6 +38,15 @@ object Engine {
         val parts = r.split("|")
         val v = parts[1].split(",").map { it.toFloat() }
         Detect(parts[0] == "1", List(4) { Offset(v[it * 2], v[it * 2 + 1]) })
+    }
+
+    /** One camera frame (raw RGB, upright, w x h) -> the page outline as fractions 0..1 (TL, TR, BR, BL), or null when no page is seen. */
+    suspend fun live(rgb: ByteArray, w: Int, h: Int): List<Offset>? = py {
+        val r = mod.callAttr("live", rgb, w, h).toString()
+        if (r.isEmpty()) null else {
+            val v = r.split(",").map { it.toFloat() }
+            List(4) { Offset(v[it * 2], v[it * 2 + 1]) }
+        }
     }
 
     suspend fun crop(path: String, quad: List<Offset>, dst: String): Pair<Int, Int> = py {

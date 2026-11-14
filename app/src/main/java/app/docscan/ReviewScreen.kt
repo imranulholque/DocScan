@@ -39,8 +39,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.width as widthDp
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -69,7 +69,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
@@ -82,12 +85,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -170,29 +183,8 @@ fun ReviewScreen(vm: AppVM) {
             TextButton(onClick = { askReset = true }) { Text(s.resetAll, fontWeight = FontWeight.Bold) }
         }
 
-        // page thumbnails
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth().height(58.dp),
-        ) {
-            itemsIndexed(pages, key = { _, p -> p.id }) { i, p ->
-                val sel = i == pager.currentPage
-                val bmp by produceState<ImageBitmap?>(p.cropped?.let { cachedBitmap(it, 160) }, p.cropped) {
-                    value = p.cropped?.let { withContext(Dispatchers.IO) { decodeBitmap(it, 160) } }
-                }
-                Box(
-                    Modifier.size(44.dp, 56.dp).clip(RoundedCornerShape(8.dp)).background(cs.surfaceVariant)
-                        .border(if (sel) 2.dp else 1.dp, if (sel) cs.primary else cs.outline, RoundedCornerShape(8.dp))
-                        .clickable { scope.launch { pager.animateScrollToPage(i) } },
-                ) {
-                    bmp?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-                    Text(
-                        "${i + 1}", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.align(Alignment.BottomEnd).background(Color(0x99000000)).padding(horizontal = 4.dp),
-                    )
-                }
-            }
-        }
+        // page thumbnails: tap = open the page, press and hold + drag left / right = change the order
+        ThumbStrip(vm, pager.currentPage) { i -> scope.launch { atFullSpeed { pager.animateScrollToPage(i) } } }
 
         // what the saved page will look like (on the page size and page number tabs)
         if (tab != 0) {
@@ -264,12 +256,11 @@ fun ReviewScreen(vm: AppVM) {
 
                     // page actions
                     Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        ActionBtn(Icons.Filled.Refresh, s.rotate) { scope.launch { vm.rotate(cur.id) } }
-                        ActionBtn(Icons.Filled.Edit, s.recrop) { vm.recrop(cur.id) }
-                        ActionBtn(Icons.AutoMirrored.Filled.ArrowBack, s.moveLeft, pager.currentPage > 0) { vm.move(pager.currentPage, -1) }
-                        ActionBtn(Icons.AutoMirrored.Filled.ArrowForward, s.moveRight, pager.currentPage < pages.size - 1) { vm.move(pager.currentPage, 1) }
-                        ActionBtn(Icons.Filled.Add, s.add) { vm.screen = Screen.Camera }
-                        ActionBtn(Icons.Filled.Delete, s.delete, tint = cs.error) { askDelete = true }
+                        ActionBtn(s.rotate, onClick = { scope.launch { vm.rotate(cur.id) } }) { c -> Icon(Icons.Filled.Refresh, s.rotate, tint = c, modifier = Modifier.size(24.dp)) }
+                        ActionBtn(s.recrop, onClick = { vm.recrop(cur.id) }) { c -> Icon(Icons.Filled.Edit, s.recrop, tint = c, modifier = Modifier.size(24.dp)) }
+                        ActionBtn(s.retake, onClick = { vm.startRetake(cur.id) }) { c -> CameraGlyph(c) }
+                        ActionBtn(s.add, onClick = { vm.screen = Screen.Camera }) { c -> Icon(Icons.Filled.Add, s.add, tint = c, modifier = Modifier.size(24.dp)) }
+                        ActionBtn(s.delete, tint = cs.error, onClick = { askDelete = true }) { c -> Icon(Icons.Filled.Delete, s.delete, tint = c, modifier = Modifier.size(24.dp)) }
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -356,12 +347,12 @@ private fun EffectPage(pg: Page) {
             shownKey = k
             old = cur; shown = b
             wipe.snapTo(0f)
-            wipe.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
+            atFullSpeed { wipe.animateTo(1f, tween(750, easing = FastOutSlowInEasing)) }
             old = null
         }
     }
     val clock = rememberClock()
-    val busyA by animateFloatAsState(if (working) 1f else 0f, tween(250), label = "busy")
+    val busyA by animateFloatAlways(if (working) 1f else 0f, tween(250), "busy")
     val label = if (pg.prevKey.substringBefore(':') != pg.mode) s.applyingEffect else s.enhancing
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -402,12 +393,7 @@ private fun EffectPage(pg: Page) {
                 }
             }
         }
-        AnimatedVisibility(
-            visible = working,
-            enter = fadeIn(tween(200)) + scaleIn(tween(250), initialScale = 0.8f),
-            exit = fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 0.9f),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
-        ) {
+        PopVisible(visible = working, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)) {
             Surface(shape = RoundedCornerShape(24.dp), color = Color(0xCC111827)) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     ScanningDoc(Modifier.size(16.dp, 22.dp), paper = Color(0xFF374151))
@@ -468,7 +454,7 @@ private fun NumberControls(vm: AppVM) {
         }
         Switch(checked = on, onCheckedChange = { vm.chooseNumPos(if (it) last else "off") })
     }
-    AnimatedVisibility(visible = on, enter = fadeIn(tween(200)) + expandVertically(tween(250)), exit = fadeOut(tween(150)) + shrinkVertically(tween(200))) {
+    ExpandVisible(visible = on) {
         Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 NumberSpotPicker(vm.numPos, { vm.chooseNumPos(it) })
@@ -480,7 +466,7 @@ private fun NumberControls(vm: AppVM) {
             }
         }
     }
-    AnimatedVisibility(visible = on, enter = fadeIn(tween(200)) + expandVertically(tween(250)), exit = fadeOut(tween(150)) + shrinkVertically(tween(200))) {
+    ExpandVisible(visible = on) {
         Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -509,7 +495,7 @@ private fun NumberSizePicker(sizes: List<Int>, selected: Int, onPick: (Int) -> U
     ) {
         sizes.forEach { sz ->
             val sel = sz == selected
-            val bg by androidx.compose.animation.animateColorAsState(if (sel) cs.primary else Color.Transparent, tween(180), label = "szBg")
+            val bg = animateColorAlways(if (sel) cs.primary else Color.Transparent, 180)
             Box(
                 Modifier.weight(1f).height(46.dp).clip(RoundedCornerShape(10.dp)).background(bg).clickable { onPick(sz) },
                 contentAlignment = Alignment.Center,
@@ -548,15 +534,141 @@ private fun LookTile(p: Page, mode: String, label: String, modifier: Modifier, o
 }
 
 @Composable
-private fun ActionBtn(icon: ImageVector, label: String, enabled: Boolean = true, tint: Color = Color.Unspecified, onClick: () -> Unit) {
+private fun ActionBtn(label: String, enabled: Boolean = true, tint: Color = Color.Unspecified, onClick: () -> Unit, icon: @Composable (Color) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val c = if (!enabled) cs.outline else if (tint != Color.Unspecified) tint else cs.onSurfaceVariant
     Column(
         Modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, label, tint = c, modifier = Modifier.size(24.dp))
+        icon(c)
         Text(label, fontSize = 11.sp, color = c, maxLines = 1)
+    }
+}
+
+/** A small camera (there is no camera icon in the basic icon set). */
+@Composable
+private fun CameraGlyph(color: Color) {
+    Canvas(Modifier.size(24.dp)) {
+        val w = size.width; val h = size.height
+        val st = Stroke(width = w * 0.085f, join = StrokeJoin.Round, cap = StrokeCap.Round)
+        val body = Path().apply {
+            moveTo(w * 0.08f, h * 0.30f); lineTo(w * 0.30f, h * 0.30f); lineTo(w * 0.38f, h * 0.18f); lineTo(w * 0.62f, h * 0.18f)
+            lineTo(w * 0.70f, h * 0.30f); lineTo(w * 0.92f, h * 0.30f); lineTo(w * 0.92f, h * 0.82f); lineTo(w * 0.08f, h * 0.82f); close()
+        }
+        drawPath(body, color, style = st)
+        drawCircle(color, w * 0.17f, Offset(w * 0.5f, h * 0.56f), style = st)
+    }
+}
+
+/**
+ * The page thumbnails. Tap = open that page. Press and hold a thumbnail, then drag it left or right: the other pages slide
+ * aside and it drops into the new place (near the edge the strip scrolls by itself). A small line below says that this works.
+ */
+@Composable
+private fun ThumbStrip(vm: AppVM, selected: Int, onSelect: (Int) -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    val pages = vm.pages
+    val itemW = 44.dp
+    val stepPx = with(density) { (itemW + 8.dp).toPx() }
+    val padPx = with(density) { 14.dp.toPx() }
+    val scroll = rememberScrollState()
+    var viewW by remember { mutableIntStateOf(0) }
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var dragPos by remember { mutableFloatStateOf(0f) }
+    val n by rememberUpdatedState(pages.size)
+    val totalDp = with(density) { (padPx * 2 + stepPx * pages.size).toDp() }
+
+    // the selected page stays in view
+    LaunchedEffect(selected, viewW) {
+        if (dragId == null && viewW > 0) {
+            val target = (padPx + selected * stepPx - (viewW - stepPx) / 2f).roundToInt().coerceAtLeast(0)
+            atFullSpeed { scroll.animateScrollTo(target, tween(300)) }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth().height(60.dp).onSizeChanged { viewW = it.width }.horizontalScroll(scroll, enabled = dragId == null)) {
+            Box(Modifier.widthDp(totalDp).height(60.dp).padding(top = 2.dp)) {
+                pages.forEachIndexed { i, p ->
+                    key(p.id) {
+                        val sel = i == selected
+                        val isDrag = dragId == p.id
+                        val slot = padPx + i * stepPx
+                        val x = remember { androidx.compose.animation.core.Animatable(slot) }
+                        LaunchedEffect(i, isDrag, stepPx) {
+                            if (!isDrag) atFullSpeed { x.animateTo(slot, tween(230, easing = FastOutSlowInEasing)) }
+                        }
+                        val lift by animateFloatAlways(if (isDrag) 1.14f else 1f, tween(160), "lift")
+                        val bmp by produceState<ImageBitmap?>(p.cropped?.let { cachedBitmap(it, 160) }, p.cropped) {
+                            value = p.cropped?.let { withContext(Dispatchers.IO) { decodeBitmap(it, 160) } }
+                        }
+                        Box(
+                            Modifier.size(itemW, 56.dp).zIndex(if (isDrag) 1f else 0f)
+                                .graphicsLayer {
+                                    translationX = x.value
+                                    scaleX = lift; scaleY = lift
+                                    shadowElevation = if (isDrag) 22f else 0f
+                                    shape = RoundedCornerShape(8.dp)
+                                }
+                                .clip(RoundedCornerShape(8.dp)).background(cs.surfaceVariant)
+                                .border(if (sel) 2.dp else 1.dp, if (sel) cs.primary else cs.outline, RoundedCornerShape(8.dp))
+                                .clickable { onSelect(vm.pages.indexOfFirst { it.id == p.id }) }
+                                .pointerInput(p.id) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            dragId = p.id; dragPos = x.value
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSelect(vm.pages.indexOfFirst { it.id == p.id })
+                                        },
+                                        onDragEnd = { dragId = null },
+                                        onDragCancel = { dragId = null },
+                                        onDrag = { change, amt ->
+                                            change.consume()
+                                            val lo = padPx; val hi = padPx + stepPx * (n - 1)
+                                            dragPos = (dragPos + amt.x).coerceIn(lo, hi)
+                                            scope.launch { x.snapTo(dragPos) }
+                                            val to = ((dragPos - padPx) / stepPx).roundToInt().coerceIn(0, n - 1)
+                                            val from = vm.pages.indexOfFirst { it.id == p.id }
+                                            if (from >= 0 && to != from) vm.moveTo(from, to)
+                                            // near the edge of the strip: scroll by itself
+                                            val sx = dragPos - scroll.value
+                                            val dir = if (sx < stepPx * 0.4f) -1 else if (sx > viewW - stepPx * 1.4f) 1 else 0
+                                            if (dir != 0) scope.launch {
+                                                val c = scroll.scrollBy(dir * 22f)
+                                                if (c != 0f) { dragPos = (dragPos + c).coerceIn(lo, hi); x.snapTo(dragPos) }
+                                            }
+                                        },
+                                    )
+                                },
+                        ) {
+                            bmp?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                            Text(
+                                "${i + 1}", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.align(Alignment.BottomEnd).background(Color(0x99000000)).padding(horizontal = 4.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (pages.size > 1) {
+            Box(Modifier.fillMaxWidth().padding(bottom = 2.dp), contentAlignment = Alignment.Center) {
+                FadeSwap(dragId != null, 150) { dragging ->
+                    Surface(shape = RoundedCornerShape(10.dp), color = if (dragging) cs.primaryContainer else Color.Transparent) {
+                        Text(
+                            (if (dragging) "↔  " + s.reorderDrop else "⇄  " + s.reorderHint), fontSize = 11.sp,
+                            color = if (dragging) cs.onPrimaryContainer else cs.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -37,7 +37,7 @@ private val Dark = darkColorScheme(
 )
 
 @Composable
-fun DocScanTheme(content: @Composable () -> Unit) {
+fun DocScannerTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) Dark else Light,
         shapes = Shapes(

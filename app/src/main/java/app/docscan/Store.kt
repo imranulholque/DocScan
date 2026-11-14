@@ -19,7 +19,7 @@ object Store {
         else -> "image/jpeg"
     }
 
-    /** Copies the files to the chosen folder (SAF) or, with no choice, to Pictures/DocScan and Documents/DocScan. Returns a readable place. */
+    /** Copies the files to the chosen folder (SAF) or, with no choice, to Pictures/DocScanner and Documents/DocScanner. Returns a readable place. */
     fun save(ctx: Context, files: List<File>, treeUri: String?): String {
         val resolver = ctx.contentResolver
         if (treeUri != null) {
@@ -35,7 +35,7 @@ object Store {
         var place = ""
         for (f in files) {
             val image = mime(f).startsWith("image/")
-            val rel = if (image) Environment.DIRECTORY_PICTURES + "/DocScan" else Environment.DIRECTORY_DOCUMENTS + "/DocScan"
+            val rel = if (image) Environment.DIRECTORY_PICTURES + "/DocScanner" else Environment.DIRECTORY_DOCUMENTS + "/DocScanner"
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
                 put(MediaStore.MediaColumns.MIME_TYPE, mime(f))
