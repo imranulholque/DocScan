@@ -177,11 +177,9 @@ def _vivid(im, clarity):
     return Image.fromarray(arr)
 
 
-def apply(im, mode, clarity):
-    """PIL image -> PIL image. mode: orig | color | vivid | gray | bw."""
+def _full_look(im, mode, clarity):
+    """The look at full strength for this slider value (the old 'apply')."""
     import numpy as np
-    if mode == "orig":
-        return _orig_look(im, clarity)
     if mode == "vivid":
         return _vivid(im, clarity)
     t, shadow, sharp = look(mode, clarity)
@@ -194,7 +192,27 @@ def apply(im, mode, clarity):
     return Image.fromarray(core.clarity(np.asarray(out), sharp))
 
 
-# ------------------------------------------------------------------ page number (Times New Roman look)
+FULL_AT = 60.0       # slider value where a look is fully applied (the default); below it the look fades back to the original
+
+
+def apply(im, mode, clarity):
+    """PIL image -> PIL image. mode: orig | color | vivid | gray | bw.
+    Like Lightroom's effect amount: 0 = the original picture, FULL_AT = the look as designed, above = stronger.
+    "orig" has no look; its slider is the text clarity (0 = untouched)."""
+    if mode == "orig":
+        return _orig_look(im, clarity)
+    c = float(clarity)
+    base = im.convert("RGB")
+    if c <= 0.0:
+        return base
+    out = _full_look(base, mode, c)
+    w = min(1.0, c / FULL_AT)
+    if w >= 1.0:
+        return out
+    return Image.blend(base, out.convert("RGB"), w)
+
+
+# ------------------------------------------------------------------ page number (Times New Roman BOLD look)
 def num_xy(pos, size, pw, ph, text):
     """Left end and BASELINE of the page number in PDF points, y measured from the TOP of the page.
     pos: tl tc tr bl bc br. Same formula as the live preview in the app."""
@@ -253,8 +271,8 @@ def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12
 
 def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
     """pages = 'path|mode|clarity' lines joined by newline. One PDF, one page per picture, in order.
-    page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Roman,
-    the standard PDF font = Times New Roman look, drawn as real text)."""
+    page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Bold,
+    the standard PDF font = Times New Roman Bold look, drawn as real text)."""
     import io
     rows = []
     for line in pages.split("\n"):
@@ -304,7 +322,7 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
         put(2, ("<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, n)).encode())
         put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
         total = font_obj
-        put(font_obj, b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>")
+        put(font_obj, b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>")
         info = font_obj + 1
         put(info, ("<< /Producer (%s) /Creator (%s) >>" % (CREDIT, CREDIT)).encode())
         total = info + 1

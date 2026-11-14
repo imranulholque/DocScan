@@ -11,6 +11,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -60,6 +62,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -220,7 +223,7 @@ fun ReviewScreen(vm: AppVM) {
                         TabPill(s.tabEffect, tab == 0, Modifier.weight(1f)) { tab = 0 }
                         TabPill(s.tabLayout, tab == 1, Modifier.weight(1f)) { tab = 1 }
                     }
-                    Column(Modifier.fillMaxWidth().heightIn(max = 250.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 290.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
                         if (tab == 0) {
                             // looks: small previews of YOUR page
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -232,7 +235,7 @@ fun ReviewScreen(vm: AppVM) {
                             }
                             // the ONE slider (works for every look, "Original" too)
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(s.clarity, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text(if (cur.mode == "orig") s.clarity else s.strength, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                 Spacer(Modifier.width(8.dp))
                                 Text("${cur.eff}%", fontSize = 15.sp, color = cs.primary, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.weight(1f))
@@ -425,26 +428,40 @@ private fun LayoutControls(vm: AppVM) {
         Text(s.pdfSize, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
         PdfSizeRow(vm)
     }
-    Text(
-        s.pageNumber + " · " + s.numFont, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-        color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
-    )
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        NumberPosPicker(vm.numPos, { vm.chooseNumPos(if (vm.numPos == it) "off" else it) })
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                if (vm.numPos == "off") s.numOff else s.posName(vm.numPos),
-                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = if (vm.numPos == "off") cs.onSurfaceVariant else cs.primary,
-            )
-            Text(s.numSizeLabel, fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Choice(s.numOff, vm.numPos == "off") { vm.chooseNumPos("off") }
-                for (n in Paper.numSizes) Choice("$n", vm.numPos != "off" && vm.numSize == n) {
-                    if (vm.numPos == "off") vm.chooseNumPos("bc")
-                    vm.chooseNumSize(n)
+    // ---- page number: one clear switch, then (only when on) where it goes and how big
+    val on = vm.numPos != "off"
+    Surface(
+        shape = RoundedCornerShape(16.dp), color = if (on) cs.primaryContainer else cs.surfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp).clickable { vm.chooseNumPos(if (on) "off" else "bc") },
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(s.numOnTitle, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (on) cs.onPrimaryContainer else cs.onSurface)
+                Text(
+                    if (on) s.numOnHint else s.numOffHint, fontSize = 12.sp,
+                    color = if (on) cs.onPrimaryContainer else cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Switch(checked = on, onCheckedChange = { vm.chooseNumPos(if (it) "bc" else "off") })
+        }
+    }
+    AnimatedVisibility(visible = on, enter = fadeIn(tween(200)) + expandVertically(tween(250)), exit = fadeOut(tween(150)) + shrinkVertically(tween(200))) {
+        Column(Modifier.fillMaxWidth()) {
+            SectionLabel(s.numWhere)
+            for (row in listOf("t" to s.numTop, "b" to s.numBottom)) {
+                Text(row.second, fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp, top = 2.dp))
+                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Choice(s.numLeft, vm.numPos == row.first + "l", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "l") }
+                    Choice(s.numCenter, vm.numPos == row.first + "c", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "c") }
+                    Choice(s.numRight, vm.numPos == row.first + "r", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "r") }
                 }
             }
+            SectionLabel(s.numLook)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (n in Paper.numSizes) Choice("$n", vm.numSize == n) { vm.chooseNumSize(n) }
+            }
+            Text(s.numFont, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }

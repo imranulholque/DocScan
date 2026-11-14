@@ -16,6 +16,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
@@ -78,7 +80,10 @@ fun CropScreen(vm: AppVM) {
     val id = vm.cropQueue.firstOrNull()
     val page = vm.pages.firstOrNull { it.id == id }
     if (page == null) {
-        LaunchedEffect(Unit) { vm.nextCrop() }
+        LaunchedEffect(vm.importing, id) { vm.nextCrop() }
+        Box(Modifier.fillMaxSize().background(Color(0xFF0B0D12)), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = Color(0xFF5EEAD4))
+        }
         return
     }
     key(page.id) { CropBody(vm, page) }
@@ -104,7 +109,7 @@ private fun CropBody(vm: AppVM, page: Page) {
     val density = LocalDensity.current
 
     val bmp by produceState<ImageBitmap?>(null, page.work) {
-        value = withContext(Dispatchers.IO) { decodeBitmap(page.work, 2600) }
+        value = withContext(Dispatchers.IO) { decodeBitmap(page.work, 1800) }
     }
     val quad = remember { mutableStateListOf<Offset>() }
     var sure by remember { mutableStateOf<Boolean?>(null) }       // null = still searching
@@ -114,10 +119,16 @@ private fun CropBody(vm: AppVM, page: Page) {
 
     // animations: a scanning light while the page is being searched, corners that glide to the page, a pulse when found
     val inf = rememberInfiniteTransition(label = "crop")
-    val scan by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1500, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "scan")
+    val scan by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "scan")
+    val scan2 by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2300, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "scan2")
+    val breathe2 by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe2")
     val ants by inf.animateFloat(0f, 36f, infiniteRepeatable(tween(700, easing = LinearEasing)), label = "ants")
     val breathe by inf.animateFloat(0.35f, 1f, infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "breathe")
     val found = remember { Animatable(0f) }
+    val enter = remember { Animatable(0f) }          // the whole screen glides in (no hard jump from the camera)
+    val picIn = remember { Animatable(0f) }          // the picture fades in as soon as it is decoded
+    LaunchedEffect(Unit) { enter.animateTo(1f, tween(320, easing = FastOutSlowInEasing)) }
+    LaunchedEffect(bmp) { if (bmp != null) picIn.animateTo(1f, tween(260)) }
 
     suspend fun runDetect() {
         sure = null
@@ -150,7 +161,10 @@ private fun CropBody(vm: AppVM, page: Page) {
     BackHandler { leave() }
 
     val total = vm.cropQueue.size
-    Column(Modifier.fillMaxSize().background(Color(0xFF0B0D12)).systemBarsPadding()) {
+    Column(
+        Modifier.fillMaxSize().background(Color(0xFF0B0D12)).systemBarsPadding()
+            .graphicsLayer { alpha = enter.value; translationY = (1f - enter.value) * 36f },
+    ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { leave() }) { Text(s.discard, color = Color(0xFFFCA5A5)) }
             Spacer(Modifier.weight(1f))
@@ -190,6 +204,7 @@ private fun CropBody(vm: AppVM, page: Page) {
             val cr = with(density) { 11.dp.toPx() }
             val sq = with(density) { 8.dp.toPx() }
             val stroke = with(density) { 2.5.dp.toPx() }
+            val gridStep = with(density) { 26.dp.toPx() }
 
             fun toScreen(p: Offset) = Offset(ox + p.x * scale, oy + p.y * scale)
             fun mid(i: Int) = (quad[i] + quad[(i + 1) % 4]) / 2f
@@ -252,29 +267,67 @@ private fun CropBody(vm: AppVM, page: Page) {
                     drawImage(
                         it, dstOffset = IntOffset(ox.roundToInt(), oy.roundToInt()),
                         dstSize = IntSize((page.w * scale).roundToInt(), (page.h * scale).roundToInt()),
+                        alpha = picIn.value,
                     )
                 }
                 val searching = sure == null
                 val teal = Color(0xFF5EEAD4)
                 if (searching && bmp != null) {
-                    // a light line sweeps over the picture, the picture corners "breathe"
                     val iw = page.w * scale; val ih = page.h * scale
                     clipRect(left = ox, top = oy, right = ox + iw, bottom = oy + ih) {
+                        // 1. the picture is dimmed, only a bright "window" follows the scanning line (clear moving light)
+                        val dim = Color(0xB3000000)
                         val y = oy + ih * scan
-                        val band = ih * 0.22f
+                        val band = ih * 0.18f
+                        val feather = band * 0.7f
+                        val topEnd = (y - band).coerceIn(oy, oy + ih)
+                        val botStart = (y + band).coerceIn(oy, oy + ih)
+                        if (topEnd > oy) drawRect(dim, Offset(ox, oy), Size(iw, topEnd - oy))
+                        if (botStart < oy + ih) drawRect(dim, Offset(ox, botStart), Size(iw, oy + ih - botStart))
                         drawRect(
-                            Brush.verticalGradient(listOf(Color.Transparent, Color(0x665EEAD4), Color.Transparent), startY = y - band, endY = y + band),
-                            Offset(ox, y - band), Size(iw, 2f * band),
+                            Brush.verticalGradient(listOf(dim, Color.Transparent), startY = y - band, endY = y - band + feather),
+                            Offset(ox, y - band), Size(iw, feather),
                         )
-                        drawLine(teal.copy(alpha = 0.35f), Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 5f)
-                        drawLine(teal, Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 1.3f)
+                        drawRect(
+                            Brush.verticalGradient(listOf(Color.Transparent, dim), startY = y + band - feather, endY = y + band),
+                            Offset(ox, y + band - feather), Size(iw, feather),
+                        )
+                        // 2. a fine grid inside the window (looks like the page is being measured)
+                        val step = gridStep
+                        var gy = oy
+                        while (gy < oy + ih) {
+                            val near = 1f - (kotlin.math.abs(gy - y) / band).coerceIn(0f, 1f)
+                            if (near > 0f) drawLine(teal.copy(alpha = 0.30f * near), Offset(ox, gy), Offset(ox + iw, gy), strokeWidth = 1.5f)
+                            gy += step
+                        }
+                        var gx = ox
+                        while (gx < ox + iw) {
+                            drawLine(teal.copy(alpha = 0.16f), Offset(gx, (y - band).coerceAtLeast(oy)), Offset(gx, (y + band).coerceAtMost(oy + ih)), strokeWidth = 1.5f)
+                            gx += step
+                        }
+                        // 3. glowing scan line + bright core
+                        drawRect(
+                            Brush.verticalGradient(listOf(Color.Transparent, Color(0x885EEAD4), Color.Transparent), startY = y - band * 0.6f, endY = y + band * 0.6f),
+                            Offset(ox, y - band * 0.6f), Size(iw, band * 1.2f),
+                        )
+                        drawLine(teal.copy(alpha = 0.45f), Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 6f)
+                        drawLine(Color.White, Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 1.2f)
+                        // 4. a thin vertical line crosses the other way (so the search looks like it covers the whole page)
+                        val x = ox + iw * scan2
+                        drawLine(teal.copy(alpha = 0.35f), Offset(x, oy), Offset(x, oy + ih), strokeWidth = stroke * 3f)
+                        drawLine(teal, Offset(x, oy), Offset(x, oy + ih), strokeWidth = stroke * 0.9f)
+                        // 5. a glowing dot where the two lines cross
+                        drawCircle(teal.copy(alpha = 0.35f), stroke * 6f, Offset(x, y))
+                        drawCircle(Color.White, stroke * 2.2f, Offset(x, y))
                     }
-                    val bl = min(iw, ih) * 0.09f
-                    val bc = teal.copy(alpha = breathe)
-                    val bs = stroke * 2.2f
+                    // 6. corner brackets that move in and out
+                    val inset = min(iw, ih) * 0.05f * breathe2
+                    val bl = min(iw, ih) * 0.11f
+                    val bc = Color.White
+                    val bs = stroke * 2.4f
                     val cs4 = listOf(
-                        Offset(ox, oy) to (1f to 1f), Offset(ox + iw, oy) to (-1f to 1f),
-                        Offset(ox + iw, oy + ih) to (-1f to -1f), Offset(ox, oy + ih) to (1f to -1f),
+                        Offset(ox + inset, oy + inset) to (1f to 1f), Offset(ox + iw - inset, oy + inset) to (-1f to 1f),
+                        Offset(ox + iw - inset, oy + ih - inset) to (-1f to -1f), Offset(ox + inset, oy + ih - inset) to (1f to -1f),
                     )
                     for ((p0, dd) in cs4) {
                         drawLine(bc, p0, Offset(p0.x + dd.first * bl, p0.y), strokeWidth = bs, cap = StrokeCap.Round)
@@ -293,6 +346,7 @@ private fun CropBody(vm: AppVM, page: Page) {
                         drawPath(path, teal.copy(alpha = 0.55f), style = Stroke(width = stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 14f), ants)))
                     } else {
                         drawPath(path, Color(0x334F46E5))
+                        if (found.value > 0.01f) drawPath(path, teal.copy(alpha = 0.30f * found.value))
                         drawPath(path, teal, style = Stroke(width = stroke))
                         if (found.value > 0.01f) {          // the page was found: one glowing pulse around it
                             drawPath(path, teal.copy(alpha = 0.55f * found.value), style = Stroke(width = stroke * (1f + 7f * found.value)))

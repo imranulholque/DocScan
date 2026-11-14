@@ -77,7 +77,7 @@ object Paper {
 
 /**
  * The page as it will be saved: paper shape (A4 / A5 / Letter / Legal / picture size), the picture placed like the
- * PDF does it, and the page number in Times New Roman. Every change glides smoothly (paper, picture, number).
+ * PDF does it, and the page number in Times New Roman Bold. Every change glides smoothly (paper, picture, number).
  */
 @Composable
 fun PaperPreview(
@@ -85,6 +85,7 @@ fun PaperPreview(
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
+    val mark = MaterialTheme.colorScheme.primary
     val paint = remember {
         android.graphics.Paint().apply {
             isAntiAlias = true
@@ -127,53 +128,15 @@ fun PaperPreview(
         if (na > 0.01f) {
             paint.textSize = ns * sc
             paint.alpha = (na * 255f).roundToInt().coerceIn(0, 255)
+            // a soft blue box behind the number: shows clearly WHERE the number goes
+            val bw = text.length * Paper.DIGIT_W * ns * sc
+            val bh = Paper.DIGIT_H * ns * sc
+            val padBox = 5f + ns * sc * 0.18f
+            val bx = left + nx * sc - padBox
+            val by = top + ny * sc - bh - padBox
+            drawRoundRect(mark.copy(alpha = 0.16f * na), Offset(bx, by), Size(bw + 2 * padBox, bh + 2 * padBox), CornerRadius(8f, 8f))
+            drawRoundRect(mark.copy(alpha = 0.85f * na), Offset(bx, by), Size(bw + 2 * padBox, bh + 2 * padBox), CornerRadius(8f, 8f), style = Stroke(width = 2.5f))
             drawContext.canvas.nativeCanvas.drawText(text, left + nx * sc, top + ny * sc, paint)
-        }
-    }
-}
-
-/** A tiny paper: tap one of the six places for the page number (tap the chosen one again = no number). */
-@Composable
-fun NumberPosPicker(pos: String, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val line = cs.outline
-    val on = cs.primary
-    val spots = Paper.positions
-    fun center(sp: String, w: Float, h: Float): Offset {
-        val fx = when (sp[1]) { 'l' -> 0.22f; 'r' -> 0.78f; else -> 0.5f }
-        val fy = if (sp[0] == 't') 0.13f else 0.87f
-        val x = fx * w
-        val y = fy * h
-        return Offset(x, y)
-    }
-    Canvas(
-        modifier.size(64.dp, 86.dp).pointerInput(Unit) {
-            detectTapGestures { off ->
-                val w = this.size.width.toFloat(); val h = this.size.height.toFloat()
-                var best = spots[0]; var bd = Float.MAX_VALUE
-                for (sp in spots) {
-                    val d = (center(sp, w, h) - off).getDistance()
-                    if (d < bd) { bd = d; best = sp }
-                }
-                onPick(best)
-            }
-        },
-    ) {
-        val w = this.size.width; val h = this.size.height
-        drawRoundRect(Color.White, Offset.Zero, Size(w, h), CornerRadius(8f, 8f))
-        drawRoundRect(line, Offset.Zero, Size(w, h), CornerRadius(8f, 8f), style = Stroke(width = 2f))
-        for (i in 0 until 5) {
-            val y = h * (0.30f + i * 0.095f)
-            drawLine(Color(0xFFD5D9E4), Offset(w * 0.18f, y), Offset(w * (if (i == 4) 0.5f else 0.82f), y), strokeWidth = 4f, cap = StrokeCap.Round)
-        }
-        for (sp in spots) {
-            val c = center(sp, w, h)
-            if (sp == pos) {
-                drawCircle(on.copy(alpha = 0.25f), 17f, c)
-                drawCircle(on, 10f, c)
-            } else {
-                drawCircle(Color(0xFFB4BACB), 6f, c, style = Stroke(width = 2.5f))
-            }
         }
     }
 }

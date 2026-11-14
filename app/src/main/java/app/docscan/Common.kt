@@ -2,6 +2,9 @@ package app.docscan
 
 import android.app.Activity
 import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -33,6 +36,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -68,19 +74,22 @@ fun StatusBarIcons(lightIcons: Boolean) {
     }
 }
 
-/** Full-screen "working" overlay that blocks touches. */
+/** Full-screen "working" overlay that blocks touches. It fades and pops in / out smoothly. */
 @Composable
 fun BusyOverlay(text: String?) {
-    if (text == null) return
-    Box(
-        Modifier.fillMaxSize().background(Color(0xAA000000)).pointerInput(Unit) { },
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
-            Row(Modifier.padding(horizontal = 22.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                ScanningDoc(Modifier.size(30.dp, 40.dp), paper = MaterialTheme.colorScheme.surfaceVariant)
-                Spacer(Modifier.width(16.dp))
-                Text(text, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+    var last by remember { mutableStateOf("") }
+    if (text != null) last = text
+    AnimatedVisibility(visible = text != null, enter = fadeIn(tween(180)), exit = fadeOut(tween(220))) {
+        Box(
+            Modifier.fillMaxSize().background(Color(0x99000000)).pointerInput(Unit) { },
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
+                Row(Modifier.padding(horizontal = 22.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ScanningDoc(Modifier.size(30.dp, 40.dp), paper = MaterialTheme.colorScheme.surfaceVariant)
+                    Spacer(Modifier.width(16.dp))
+                    Text(last, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                }
             }
         }
     }

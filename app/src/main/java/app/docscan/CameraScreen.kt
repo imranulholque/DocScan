@@ -54,6 +54,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -110,10 +111,24 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
 
     val previewView = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
     val imageCapture = remember {
-        ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            // about 8 MP (well above 1080p) so text stays sharp; never the slow 12-50 MP sensor mode
+            .setResolutionSelector(
+                androidx.camera.core.resolutionselector.ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(androidx.camera.core.resolutionselector.AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        androidx.camera.core.resolutionselector.ResolutionStrategy(
+                            android.util.Size(3264, 2448),
+                            androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                        ),
+                    ).build(),
+            ).build()
     }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var torch by remember { mutableStateOf(false) }
+    var shooting by remember { mutableStateOf(false) }
+    val flash = remember { androidx.compose.animation.core.Animatable(0f) }
 
     LaunchedEffect(Unit) {
         try {
@@ -135,23 +150,25 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     }
 
     fun shoot() {
-        if (vm.busy != null) return
-        vm.busy = s.processing
+        if (shooting || vm.busy != null) return
+        shooting = true
+        scope.launch { flash.snapTo(1f); flash.animateTo(0f, androidx.compose.animation.core.tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing)) }   // soft "got it" pulse
         val file = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
         imageCapture.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
             ContextCompat.getMainExecutor(ctx),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    // no "processing" screen here: the picture is prepared natively and the crop screen opens right away
                     scope.launch {
                         try {
                             val id = vm.addPhoto(file)
                             if (id != null) vm.queueCrop(listOf(id), Screen.Camera)
-                        } finally { vm.busy = null }
+                        } finally { shooting = false }
                     }
                 }
                 override fun onError(e: ImageCaptureException) {
-                    vm.busy = null
+                    shooting = false
                     vm.toast(s.errPrefix + (e.message ?: ""))
                 }
             },
@@ -173,13 +190,17 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
         )
         // guide frame
         Canvas(Modifier.fillMaxSize()) {
-            val mx = size.width * 0.08f
-            val my = size.height * 0.16f
+            // on capture the frame closes in a little and turns teal, then relaxes back: a smooth "caught the page"
+            val f = flash.value
+            val mx = size.width * 0.08f + f * 14f
+            val my = size.height * 0.16f + f * 14f
             drawRoundRect(
-                Color(0xCCFFFFFF), Offset(mx, my), Size(size.width - 2 * mx, size.height - 2 * my - size.height * 0.08f),
-                CornerRadius(24f, 24f), style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 16f))),
+                androidx.compose.ui.graphics.lerp(Color(0xCCFFFFFF), Color(0xFF5EEAD4), f),
+                Offset(mx, my), Size(size.width - 2 * mx, size.height - 2 * my - size.height * 0.08f),
+                CornerRadius(24f, 24f), style = Stroke(width = 3f + 4f * f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 16f))),
             )
         }
+        if (flash.value > 0.01f) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.16f * flash.value)))   // only a faint glow
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassButton(onClick = leave) { Icon(Icons.Filled.Close, s.back, tint = Color.White) }
@@ -200,7 +221,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     GlassButton(onClick = { pick.launch("image/*") }, size = 52) { Icon(Icons.Filled.Add, s.gallery, tint = Color.White) }
                 }
-                Shutter(onClick = { shoot() })
+                Shutter(pop = flash.value, onClick = { shoot() })
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     if (count > 0) {
                         Surface(
@@ -227,9 +248,9 @@ private fun GlassButton(onClick: () -> Unit, size: Int = 44, active: Boolean = f
 }
 
 @Composable
-private fun Shutter(onClick: () -> Unit) {
+private fun Shutter(pop: Float, onClick: () -> Unit) {
     Box(
-        Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(7.dp).clip(CircleShape)
+        Modifier.size(78.dp).graphicsLayer { val k = 1f - 0.12f * pop; scaleX = k; scaleY = k }.border(4.dp, Color.White, CircleShape).padding(7.dp).clip(CircleShape)
             .background(Color.White).clickable(onClick = onClick),
     )
 }

@@ -36,7 +36,7 @@ data class Page(
     val w: Int, val h: Int,           // its size
     val cropped: String? = null,      // straightened page
     val quad: List<Offset>? = null,   // the 4 corners (in the working photo)
-    val mode: String = "color",       // orig | color | vivid | gray | bw
+    val mode: String = "orig",        // orig (default: the picture as photographed) | color | color | vivid | gray | bw
     val clarity: Int = 60,            // 0..100, the one text-clarity slider (color / vivid / gray / bw)
     val oClarity: Int = 0,            // the same slider for "orig": 0 = picture exactly as photographed
     val prev: String? = null,         // preview of the chosen look
@@ -165,12 +165,17 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     private fun file(id: String, tag: String) = File(sessionDir, "$id-$tag-${System.nanoTime()}.jpg").absolutePath
 
     // ------------------------------------------------------------ adding pictures
-    /** A photo file (camera or gallery copy) becomes a page that still has to be cropped. */
+    /** A photo file (camera or gallery copy) becomes a page that still has to be cropped.
+     *  Done natively (no Python): the picture is ready in a fraction of a second, so the crop screen opens at once. */
     suspend fun addPhoto(src: File): String? {
         val id = newId()
         val work = File(sessionDir, "$id-work.jpg")
         return try {
-            val (w, h) = Engine.prepare(src.absolutePath, work.absolutePath)
+            val (w, h) = try {
+                prepareNative(src, work)
+            } catch (e: Exception) {
+                Engine.prepare(src.absolutePath, work.absolutePath)      // rare formats: the Python way
+            }
             pages.add(Page(id, work.absolutePath, w, h))
             id
         } catch (e: Exception) {
@@ -181,25 +186,36 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    var importing by mutableIntStateOf(0)          // pictures from the gallery that are still being prepared
+
+    /** The first picture opens the crop screen at once, the others are prepared while the person crops it. */
     suspend fun importUris(uris: List<Uri>) {
-        busy = str.working
+        importing += uris.size
+        var first = true
         try {
-            val ids = ArrayList<String>()
             for (u in uris) {
                 val tmp = File(ctx.cacheDir, "imp_${System.nanoTime()}.jpg")
-                withContext(Dispatchers.IO) {
-                    ctx.contentResolver.openInputStream(u)!!.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                try {
+                    withContext(Dispatchers.IO) {
+                        ctx.contentResolver.openInputStream(u)!!.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                    }
+                } catch (e: Exception) {
+                    toast(str.errPrefix + (e.message ?: "")); importing--; continue
                 }
-                addPhoto(tmp)?.let { ids.add(it) }
+                val id = addPhoto(tmp)
+                importing--
+                if (id == null) continue
+                if (first) {
+                    first = false
+                    current = pages.indexOfFirst { it.id == id }
+                    queueCrop(listOf(id), Screen.Review)
+                } else {
+                    cropQueue = cropQueue + id
+                }
             }
-            if (ids.isNotEmpty()) {
-                current = pages.indexOfFirst { it.id == ids[0] }
-                queueCrop(ids, Screen.Review)
-            }
-        } catch (e: Exception) {
-            toast(str.errPrefix + (e.message ?: ""))
         } finally {
-            busy = null
+            importing = 0
+            finishCropIfDone()
         }
     }
 
@@ -224,11 +240,15 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             if (p != null && p.cropped == null) { del(p.work); pages.removeAll { it.id == id } }
         }
         cropQueue = cropQueue.drop(1)
-        if (cropQueue.isEmpty()) {
-            val back = cropReturn
-            screen = if (back == Screen.Review && pages.none { it.cropped != null }) Screen.Home else back
-            if (screen == Screen.Review) current = current.coerceIn(0, max(0, pages.size - 1))
-        }
+        finishCropIfDone()
+    }
+
+    /** Queue empty and nothing more is being prepared: leave the crop screen. */
+    fun finishCropIfDone() {
+        if (screen != Screen.Crop || cropQueue.isNotEmpty() || importing > 0) return
+        val back = cropReturn
+        screen = if (back == Screen.Review && pages.none { it.cropped != null }) Screen.Home else back
+        if (screen == Screen.Review) current = current.coerceIn(0, max(0, pages.size - 1))
     }
 
     // ------------------------------------------------------------ page editing
@@ -350,4 +370,35 @@ fun decodeBitmap(path: String, maxSide: Int): ImageBitmap? {
     while (max(o.outWidth, o.outHeight) / (sample * 2) >= maxSide) sample *= 2
     val o2 = BitmapFactory.Options().apply { inSampleSize = sample }
     return BitmapFactory.decodeFile(path, o2)?.asImageBitmap()
+}
+
+/** Camera / gallery photo -> upright working JPEG (EXIF turned, long side <= maxSide). Native and fast. Returns (w, h). */
+suspend fun prepareNative(src: File, dst: File, maxSide: Int = 2600): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(src.absolutePath, o)
+    if (o.outWidth <= 0 || o.outHeight <= 0) throw IllegalStateException("unreadable picture")
+    var sample = 1
+    while (max(o.outWidth, o.outHeight) / (sample * 2) >= maxSide) sample *= 2
+    val bmp = BitmapFactory.decodeFile(src.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+        ?: throw IllegalStateException("unreadable picture")
+    val deg = try {
+        when (android.media.ExifInterface(src.absolutePath).getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL,
+        )) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+    } catch (_: Exception) { 0f }
+    val k = maxSide.toFloat() / max(bmp.width, bmp.height)
+    val m = android.graphics.Matrix()
+    if (k < 1f) m.postScale(k, k)
+    if (deg != 0f) m.postRotate(deg)
+    val out = if (m.isIdentity) bmp else android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    dst.outputStream().buffered().use { out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, it) }
+    val size = out.width to out.height
+    if (out !== bmp) bmp.recycle()
+    out.recycle()
+    size
 }

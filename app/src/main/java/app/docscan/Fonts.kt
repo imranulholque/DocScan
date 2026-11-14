@@ -5,12 +5,12 @@ import android.graphics.Typeface
 import java.io.File
 
 /**
- * Page numbers look like Times New Roman. Android has no Times New Roman, so the app carries Liberation Serif
+ * Page numbers look like Times New Roman Bold. Android has no Times New Roman, so the app carries Liberation Serif Bold
  * (same letter shapes and exactly the same widths, free licence: SIL OFL) in assets/fonts.
- * PDF page numbers use the standard PDF font Times-Roman (real text), pictures use this file.
+ * PDF page numbers use the standard PDF font Times-Bold (real text), pictures use this file.
  */
 object Fonts {
-    private const val ASSET = "fonts/LiberationSerif-Regular.ttf"
+    private const val ASSET = "fonts/LiberationSerif-Bold.ttf"
     private var tf: Typeface? = null
 
     fun typeface(ctx: Context): Typeface = tf ?: (try {
@@ -21,7 +21,7 @@ object Fonts {
 
     /** A real file path of the font for Python (Pillow). Copied from assets once. */
     fun path(ctx: Context): String {
-        val f = File(ctx.filesDir, "fonts/LiberationSerif-Regular.ttf")
+        val f = File(ctx.filesDir, "fonts/LiberationSerif-Bold.ttf")
         if (!f.exists() || f.length() == 0L) {
             f.parentFile?.mkdirs()
             try {
