@@ -110,15 +110,15 @@ fun FormatPicker(vm: AppVM, showSize: Boolean = true) {
     val s = LocalStr.current
     SectionLabel(s.format)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Choice("PDF", vm.fmt == "pdf", Modifier.weight(1f)) { vm.setFmt("pdf") }
-        Choice("JPG", vm.fmt == "jpg", Modifier.weight(1f)) { vm.setFmt("jpg") }
-        Choice("PNG", vm.fmt == "png", Modifier.weight(1f)) { vm.setFmt("png") }
+        Choice("PDF", vm.fmt == "pdf", Modifier.weight(1f)) { vm.chooseFmt("pdf") }
+        Choice("JPG", vm.fmt == "jpg", Modifier.weight(1f)) { vm.chooseFmt("jpg") }
+        Choice("PNG", vm.fmt == "png", Modifier.weight(1f)) { vm.chooseFmt("png") }
     }
     if (showSize && vm.fmt == "pdf") {
         SectionLabel(s.pdfSize)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Choice(s.sizeFit, vm.pdfSize == "fit", Modifier.weight(1f)) { vm.setPdfSize("fit") }
-            Choice(s.sizeA4, vm.pdfSize == "a4", Modifier.weight(1f)) { vm.setPdfSize("a4") }
+            Choice(s.sizeFit, vm.pdfSize == "fit", Modifier.weight(1f)) { vm.choosePdfSize("fit") }
+            Choice(s.sizeA4, vm.pdfSize == "a4", Modifier.weight(1f)) { vm.choosePdfSize("a4") }
         }
     }
 }

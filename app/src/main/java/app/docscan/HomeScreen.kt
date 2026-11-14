@@ -64,7 +64,7 @@ fun HomeScreen(vm: AppVM) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("DocScan", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = cs.primary, modifier = Modifier.weight(1f))
-            TextButton(onClick = { vm.setLang(if (vm.lang == "bn") "en" else "bn") }) {
+            TextButton(onClick = { vm.chooseLang(if (vm.lang == "bn") "en" else "bn") }) {
                 Text(if (vm.lang == "bn") "English" else "বাংলা", fontWeight = FontWeight.SemiBold)
             }
             IconButton(onClick = { vm.screen = Screen.Settings }) {

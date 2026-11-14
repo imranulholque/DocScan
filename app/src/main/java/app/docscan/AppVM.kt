@@ -59,9 +59,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         private set
     val str: Str get() = if (lang == "bn") Bn else En
 
-    fun setLang(v: String) { lang = v; prefs.edit().putString("lang", v).apply() }
-    fun setFmt(v: String) { fmt = v; prefs.edit().putString("fmt", v).apply() }
-    fun setPdfSize(v: String) { pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
+    fun chooseLang(v: String) { lang = v; prefs.edit().putString("lang", v).apply() }
+    fun chooseFmt(v: String) { fmt = v; prefs.edit().putString("fmt", v).apply() }
+    fun choosePdfSize(v: String) { pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
     fun setTree(v: String?) { treeUri = v; prefs.edit().putString("tree", v).apply() }
 
     var screen by mutableStateOf(Screen.Home)
@@ -86,7 +86,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     private val askedBuilds = HashSet<Int>()
     private val cancelUpdate = AtomicBoolean(false)
 
-    fun setAutoUpdate(on: Boolean) {
+    fun chooseAutoUpdate(on: Boolean) {
         autoUpdate = on
         prefs.edit().putBoolean("auto_update", on).apply()
         if (!on) { update = null; updateAsk = false }

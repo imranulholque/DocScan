@@ -83,8 +83,8 @@ fun SettingsScreen(vm: AppVM) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
             SectionLabel(s.language)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Choice("বাংলা", vm.lang == "bn", Modifier.weight(1f)) { vm.setLang("bn") }
-                Choice("English", vm.lang == "en", Modifier.weight(1f)) { vm.setLang("en") }
+                Choice("বাংলা", vm.lang == "bn", Modifier.weight(1f)) { vm.chooseLang("bn") }
+                Choice("English", vm.lang == "en", Modifier.weight(1f)) { vm.chooseLang("en") }
             }
             FormatPicker(vm)
             LocationPicker(vm)
@@ -97,7 +97,7 @@ fun SettingsScreen(vm: AppVM) {
                             Text(s.updAuto, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             Text(s.updAutoSub, fontSize = 12.sp, color = cs.onSurfaceVariant)
                         }
-                        Switch(checked = vm.autoUpdate, onCheckedChange = { vm.setAutoUpdate(it) })
+                        Switch(checked = vm.autoUpdate, onCheckedChange = { vm.chooseAutoUpdate(it) })
                     }
                     Spacer(Modifier.height(10.dp))
                     Text(
