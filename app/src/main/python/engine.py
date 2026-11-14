@@ -336,9 +336,10 @@ def render(path, dst, mode, clarity, max_side=0, tc=0):
     return "%d,%d" % out.size
 
 
-def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path="", tc=0, rot=0):
-    """Final picture: JPG or PNG, full resolution, with the chosen look (and the page number, if chosen)."""
+def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path="", tc=0, rot=0, sigs=""):
+    """Final picture: JPG or PNG, full resolution, with the chosen look, the signatures (if any) and the page number (if chosen)."""
     out = apply(_turn(_open(path), rot), mode, float(clarity), float(tc))
+    out = sign_page(out, sigs)
     out = stamp_number(out, number, pos, float(num_size), font_path)
     if fmt == "png":
         out.save(dst, "PNG", optimize=False)
@@ -348,7 +349,7 @@ def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12
 
 
 def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
-    """pages = 'path|mode|clarity|textclarity|turns' lines joined by newline. One PDF, one page per picture, in order.
+    """pages = 'path|mode|clarity|textclarity|turns|signatures' lines joined by newline. One PDF, one page per picture, in order.
     page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Bold,
     the standard PDF font = Times New Roman Bold look, drawn as real text)."""
     import io
@@ -356,8 +357,8 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
     for line in pages.split("\n"):
         if not line.strip():
             continue
-        p, m, c, t, r = line.rsplit("|", 4)                     # path | mode | clarity | text clarity | turns
-        rows.append((p, m, c, t, r))
+        p, m, c, t, r, sg = line.rsplit("|", 5)                 # path | mode | clarity | text clarity | turns | signatures
+        rows.append((p, m, c, t, r, sg))
     n = len(rows)
     if n == 0:
         raise ValueError("Nothing to save")
@@ -372,8 +373,8 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
             f.write(b"%d 0 obj\n" % num + body + b"\nendobj\n")
 
         font_obj = 3 + 3 * n
-        for i, (p, m, c, t, r) in enumerate(rows):
-            im = apply(_turn(_open(p), int(r)), m, float(c), float(t)).convert("RGB")
+        for i, (p, m, c, t, r, sg) in enumerate(rows):
+            im = sign_page(apply(_turn(_open(p), int(r)), m, float(c), float(t)), sg).convert("RGB")
             w, h = im.size
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
@@ -417,3 +418,122 @@ def thumbs(path, prefix, clarity=60):
     for m in ("orig", "color", "vivid", "gray", "bw"):
         render(path, "%s_%s.jpg" % (prefix, m), m, 0 if m == "orig" else clarity, 220)
     return "ok"
+
+
+
+# ------------------------------------------------------------------ signatures (background removal = Image Fixer's core.remove_background)
+SIG_MAX = 1400               # a saved signature is never bigger than this (long side, pixels)
+
+
+def _bleed(cut):
+    """Pixels that are (almost) transparent get the colour of the ink: when the signature is turned or resized no light or dark
+    halo appears around the strokes (their hidden colour would otherwise be mixed in)."""
+    import numpy as np
+    a = np.asarray(cut)
+    al = a[..., 3]
+    solid = al > 200
+    if int(solid.sum()) < 8:
+        return cut
+    ink = np.median(a[..., :3][solid], axis=0)
+    weak = al < 140
+    out = a.copy()
+    out[..., :3][weak] = ink.astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
+
+
+def sig_guess(path):
+    """Where the writing is: 'x0,y0,x1,y1' (picture pixels) around the ink on the paper, with a little room.
+    The whole picture when no clear writing is found."""
+    im = _open(path)
+    W, H = im.size
+    k = 700.0 / float(max(W, H))
+    small = im.resize((max(8, round(W * k)), max(8, round(H * k))), Image.Resampling.BILINEAR) if k < 1.0 else im
+    if k >= 1.0:
+        k = 1.0
+    try:
+        cut = core.remove_background(small, None, strength=60, soft=30, uneven=False, tint="orig", opacity=100, remove=True,
+                                     specks=70, fine=70)
+        a = cut.split()[3]
+        sw, sh = small.size
+        b = core.content_box(a, pad=0.10, thr=90)
+        if b is None:
+            raise ValueError("nothing")
+        covered = (b[2] - b[0]) * (b[3] - b[1]) / float(sw * sh)
+        if covered > 0.97:
+            raise ValueError("everything")
+        x0, y0, x1, y1 = [v / k for v in b]
+    except Exception:
+        x0, y0, x1, y1 = 0, 0, W, H
+    return "%d,%d,%d,%d" % (max(0, x0), max(0, y0), min(W, x1), min(H, y1))
+
+
+def sig_make(src, dst, box, strength=50, uneven=False, tint="orig", remove=True, bold=0, max_side=SIG_MAX, trim=True):
+    """Picture (cropped to box 'x0,y0,x1,y1') -> transparent PNG with the paper taken away. Returns 'w,h'.
+    strength  0..100  how much paper / shadow is removed (high = cleaner, low = keeps the thinnest strokes)
+    uneven    the paper is not one flat colour (shadow, grey print): the paper colour is followed across the picture
+    tint      orig | black | blue (ink colour)      bold  0..100  darker, bolder ink
+    trim      cut the empty margin away (the final signature); False keeps the crop box as it is (the live preview)"""
+    import numpy as np
+    im = _open(src)
+    W, H = im.size
+    v = [int(round(float(x))) for x in str(box).split(",")]
+    x0, y0, x1, y1 = max(0, min(v[0], W - 2)), max(0, min(v[1], H - 2)), max(2, min(v[2], W)), max(2, min(v[3], H))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        x0, y0, x1, y1 = 0, 0, W, H
+    im = im.crop((x0, y0, x1, y1)).convert("RGB")
+    max_side = int(max_side)
+    if max(im.size) > max_side:
+        k = max_side / float(max(im.size))
+        im = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.Resampling.LANCZOS)
+    if remove:
+        cut = core.remove_background(im, None, strength=int(strength), soft=30, uneven=bool(uneven), tint=str(tint),
+                                     opacity=100, remove=True, specks=50, fine=70)
+        al = cut.split()[3]
+        if float(bold) > 0:
+            lut = [int(min(255, v * (1.0 + float(bold) / 35.0))) for v in range(256)]
+            cut.putalpha(al.point(lut))
+            al = cut.split()[3]
+        if trim:
+            b = core.content_box(al, pad=0.04, thr=14)
+            if b is not None:
+                cut = cut.crop(b)
+        cut = _bleed(cut)
+    else:
+        cut = im.convert("RGBA")
+    cut.save(dst, "PNG")
+    return "%d,%d" % cut.size
+
+
+def sign_page(im, sigs):
+    """Puts the signatures on a page picture. sigs = items 'path~cx~cy~width~rot~alpha' joined by ';'
+    cx, cy = centre and width = fractions of the page picture, rot = clockwise degrees, alpha = 0..1."""
+    if not sigs:
+        return im
+    base = im.convert("RGB")
+    W, H = base.size
+    for item in str(sigs).split(";"):
+        if not item.strip():
+            continue
+        try:
+            p, cx, cy, w, rot, al = item.split("~")
+            s = Image.open(p).convert("RGBA")
+            tw = max(2.0, float(w) * W)
+            f = tw / float(s.width)
+            nw, nh = max(1, round(s.width * f)), max(1, round(s.height * f))
+            s = s.resize((nw, nh), Image.Resampling.LANCZOS if f < 1.0 else Image.Resampling.BICUBIC)
+            r = float(rot) % 360.0
+            if abs(r) > 0.05:
+                try:
+                    s = s.convert("RGBa").rotate(-r, expand=True, resample=Image.Resampling.BICUBIC).convert("RGBA")
+                except Exception:
+                    s = s.rotate(-r, expand=True, resample=Image.Resampling.BICUBIC)
+            a = s.split()[3]
+            op = max(0.0, min(1.0, float(al)))
+            if op < 0.999:
+                a = a.point([int(v * op) for v in range(256)])
+            x = int(round(float(cx) * W - s.width / 2.0))
+            y = int(round(float(cy) * H - s.height / 2.0))
+            base.paste(s.convert("RGB"), (x, y), a)
+        except Exception:
+            continue
+    return base
