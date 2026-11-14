@@ -38,16 +38,17 @@ data class Page(
     val quad: List<Offset>? = null,   // the 4 corners (in the working photo)
     val mode: String = "orig",        // orig (default: the picture as photographed) | color | vivid | gray | bw
     val clarity: Int = 60,            // 0..100, the one text-clarity slider (color / vivid / gray / bw)
-    val oClarity: Int = 0,            // the same slider for "orig": 0 = picture exactly as photographed
+    val oClarity: Int = 0,            // the TEXT CLARITY slider (every look; for "orig" it is the only slider): 0 = no change
+    val rot: Int = 0,                 // clockwise quarter turns done on the review screen (instant: the files are turned only when saving)
     val prev: String? = null,         // preview of the chosen look
     val prevKey: String = "",
     val prevSide: Int = 0,            // long side of that preview (a quick small one first, the big one when the person pauses)
     val thumbs: String? = null,       // prefix of the small look previews
 ) {
-    /** The clarity value that belongs to the chosen look. */
+    /** The slider value that belongs to the chosen look (orig: the text clarity, others: the effect amount). */
     val eff: Int get() = if (mode == "orig") oClarity else clarity
     /** Changes whenever the look changes: a preview is up to date when prevKey == key. */
-    val look: String get() = "$mode:$eff"
+    val look: String get() = if (mode == "orig") "orig:$oClarity" else "$mode:$clarity:$oClarity"
     /** Original with no clarity needs no preview file at all: the straightened page itself is shown (nothing to load twice). */
     val needsPrev: Boolean get() = !(mode == "orig" && oClarity <= 0)
 }
@@ -304,7 +305,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val dst = file(id, "crop")
         Engine.crop(p.work, quad, dst)
         del(p.cropped); del(p.prev)
-        upd(id) { it.copy(cropped = dst, quad = quad, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
+        upd(id) { it.copy(cropped = dst, quad = quad, rot = 0, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
         replace?.let { (newId, oldId) -> if (newId == id) swapIn(newId, oldId) }
     }
 
@@ -345,19 +346,17 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ page editing
     /** Picks the look and / or moves the clarity slider (the slider value belongs to the look that is chosen). */
-    fun setLook(id: String, mode: String? = null, clarity: Int? = null) {
-        checkpoint(if (mode != null) null else "clarity:$id")
-        setLookNow(id, mode, clarity)
+    fun setLook(id: String, mode: String? = null, clarity: Int? = null, text: Int? = null) {
+        checkpoint(if (mode != null) null else if (text != null) "text:$id" else "clarity:$id")
+        setLookNow(id, mode, clarity, text)
     }
 
-    private fun setLookNow(id: String, mode: String?, clarity: Int?) = upd(id) { p ->
+    private fun setLookNow(id: String, mode: String?, clarity: Int?, text: Int?) = upd(id) { p ->
         val m = mode ?: p.mode
-        val q = p.copy(mode = m)
-        when {
-            clarity == null -> q
-            m == "orig" -> q.copy(oClarity = clarity)
-            else -> q.copy(clarity = clarity)
-        }
+        var q = p.copy(mode = m)
+        if (clarity != null) q = if (m == "orig") q.copy(oClarity = clarity) else q.copy(clarity = clarity)
+        if (text != null) q = q.copy(oClarity = text)          // the text clarity slider: the same value for every look
+        q
     }
 
     fun applyLookToAll(from: Page) {
@@ -373,7 +372,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (p.prev != null && p.prevKey == key && p.prevSide >= side) return
         val dst = file(id, "prev")
         try {
-            Engine.render(c, dst, p.mode, p.eff, side)
+            Engine.render(c, dst, p.mode, p.eff, side, if (p.mode == "orig") 0 else p.oClarity)
         } catch (e: CancellationException) {
             File(dst).delete(); throw e
         } catch (e: Exception) {
@@ -394,18 +393,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         upd(id) { it.copy(thumbs = prefix) }
     }
 
-    suspend fun rotate(id: String) {
-        val p = page(id) ?: return
-        val c = p.cropped ?: return
-        busy = str.working
-        try {
-            val dst = file(id, "crop")
-            Engine.rotate(c, dst, 1)
-            del(c); del(p.prev)
-            upd(id) { it.copy(cropped = dst, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
-        } catch (e: Exception) {
-            toast(str.errPrefix + (e.message ?: ""))
-        } finally { busy = null }
+    /** Instant: only the number of quarter turns changes. The screen turns the picture it already has; the files are turned when saving. */
+    fun rotate(id: String) {
+        upd(id) { it.copy(rot = (it.rot + 1) % 4) }
     }
 
     fun delete(index: Int) {
@@ -448,7 +438,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (format == "pdf") {
             busy = str.processing
             val f = File(out, "DocScanner_$ts.pdf")
-            Engine.makePdf(list.map { Triple(it.cropped!!, it.mode, it.eff) }, f.absolutePath, size, numPos, numSize)
+            Engine.makePdf(list.map { Engine.PdfItem(it.cropped!!, it.mode, it.eff, if (it.mode == "orig") 0 else it.oClarity, it.rot) }, f.absolutePath, size, numPos, numSize)
             return listOf(f)
         }
         val ext = if (format == "png") "png" else "jpg"
@@ -456,7 +446,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         list.forEachIndexed { i, p ->
             busy = str.exporting(i + 1, list.size)
             val f = File(out, if (list.size == 1) "DocScanner_$ts.$ext" else "DocScanner_${ts}_${i + 1}.$ext")
-            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx))
+            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx), if (p.mode == "orig") 0 else p.oClarity, p.rot)
             files.add(f)
         }
         return files

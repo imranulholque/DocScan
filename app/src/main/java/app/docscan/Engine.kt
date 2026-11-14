@@ -18,6 +18,14 @@ object Engine {
             r.run()
         }, "docscanner-python", 32L * 1024 * 1024)
     }.asCoroutineDispatcher()
+    // The page finder (live outline + auto crop) is plain Kotlin now (PageFinder.kt, no OpenCV, no Python): its own thread, so it never
+    // waits behind a Python job (effects, saving) and the Python thread never waits behind it.
+    private val finder = Executors.newSingleThreadExecutor { r ->
+        Thread(null, {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE)
+            r.run()
+        }, "docscanner-finder", 16L * 1024 * 1024)
+    }.asCoroutineDispatcher()
     private val mod by lazy { Python.getInstance().getModule("engine") }
 
     private suspend fun <T> py(block: () -> T): T = withContext(dispatcher) { block() }
@@ -33,7 +41,18 @@ object Engine {
     suspend fun prepare(src: String, dst: String): Pair<Int, Int> =
         py { size(mod.callAttr("prepare", src, dst).toString()) }
 
-    suspend fun detect(path: String): Detect = py {
+    /** Auto crop after a photo: the native finder (same one as Image Fixer's phone camera); the Python finder is only the safety net. */
+    suspend fun detect(path: String): Detect {
+        try {
+            val r = withContext(finder) { PageFinder.detect(path) }
+            return Detect(r.first, r.second)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) { }
+        return detectPython(path)
+    }
+
+    private suspend fun detectPython(path: String): Detect = py {
         val r = mod.callAttr("detect", path).toString()
         val parts = r.split("|")
         val v = parts[1].split(",").map { it.toFloat() }
@@ -41,12 +60,8 @@ object Engine {
     }
 
     /** One camera frame (raw RGB, upright, w x h) -> the page outline as fractions 0..1 (TL, TR, BR, BL), or null when no page is seen. */
-    suspend fun live(rgb: ByteArray, w: Int, h: Int): List<Offset>? = py {
-        val r = mod.callAttr("live", rgb, w, h).toString()
-        if (r.isEmpty()) null else {
-            val v = r.split(",").map { it.toFloat() }
-            List(4) { Offset(v[it * 2], v[it * 2 + 1]) }
-        }
+    suspend fun live(rgb: ByteArray, w: Int, h: Int): List<Offset>? = withContext(finder) {
+        try { PageFinder.live(rgb, w, h) } catch (_: Exception) { null }
     }
 
     suspend fun crop(path: String, quad: List<Offset>, dst: String): Pair<Int, Int> = py {
@@ -58,8 +73,9 @@ object Engine {
         py { mod.callAttr("rotate", path, dst, turns) }
     }
 
-    suspend fun render(path: String, dst: String, mode: String, clarity: Int, maxSide: Int) {
-        py { mod.callAttr("render", path, dst, mode, clarity.toDouble(), maxSide) }
+    /** clarity = the effect amount (for "orig": the text clarity), textClarity = the text clarity slider of the other looks. */
+    suspend fun render(path: String, dst: String, mode: String, clarity: Int, maxSide: Int, textClarity: Int = 0) {
+        py { mod.callAttr("render", path, dst, mode, clarity.toDouble(), maxSide, textClarity.toDouble()) }
     }
 
     suspend fun thumbs(path: String, prefix: String, clarity: Int) {
@@ -69,13 +85,15 @@ object Engine {
     /** number = page number to print (used when numPos is not "off"), numPos = off | tl tc tr bl bc br. */
     suspend fun exportImage(
         path: String, dst: String, fmt: String, mode: String, clarity: Int,
-        number: Int, numPos: String, numSize: Int, fontPath: String,
+        number: Int, numPos: String, numSize: Int, fontPath: String, textClarity: Int = 0, turns: Int = 0,
     ) {
-        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble(), number, numPos, numSize.toDouble(), fontPath) }
+        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble(), number, numPos, numSize.toDouble(), fontPath, textClarity.toDouble(), turns) }
     }
 
-    suspend fun makePdf(pages: List<Triple<String, String, Int>>, dst: String, pageSize: String, numPos: String, numSize: Int) {
-        val lines = pages.joinToString("\n") { "${it.first}|${it.second}|${it.third}" }
+    class PdfItem(val path: String, val mode: String, val clarity: Int, val textClarity: Int, val turns: Int)
+
+    suspend fun makePdf(pages: List<PdfItem>, dst: String, pageSize: String, numPos: String, numSize: Int) {
+        val lines = pages.joinToString("\n") { "${it.path}|${it.mode}|${it.clarity}|${it.textClarity}|${it.turns}" }
         py { mod.callAttr("make_pdf", lines, dst, pageSize, numPos, numSize.toDouble()) }
     }
 }

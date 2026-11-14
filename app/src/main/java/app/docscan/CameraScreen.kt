@@ -298,7 +298,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
             try {
                 val now = System.currentTimeMillis()
                 if (guide.on && !guide.busy.get() && now - guide.last > 120) {
-                    val f = frameToRgb(proxy, 400)
+                    val f = frameToRgb(proxy, 320)
                     if (f != null) {
                         guide.last = now
                         guide.busy.set(true)

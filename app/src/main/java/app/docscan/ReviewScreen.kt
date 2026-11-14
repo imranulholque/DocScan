@@ -41,6 +41,15 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.layout.width as widthDp
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -102,6 +111,8 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -198,12 +209,14 @@ fun ReviewScreen(vm: AppVM) {
         }
 
         // the page itself
+        var zoomed by remember { mutableStateOf(false) }      // a page is zoomed in: one finger moves the picture, not the pager
         HorizontalPager(
             pager, Modifier.weight(1f).fillMaxWidth(), pageSpacing = 12.dp,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            userScrollEnabled = !zoomed,
         ) { i ->
             pages.getOrNull(i)?.let { pg ->
-                if (tab == 0) EffectPage(pg)
+                if (tab == 0) EffectPage(pg) { zoomed = it }
                 else {
                     val bmp by rememberPageBitmap(pg)
                     PaperPreview(
@@ -224,7 +237,7 @@ fun ReviewScreen(vm: AppVM) {
                         TabPill(s.tabSize, tab == 1, Modifier.weight(1f)) { tab = 1 }
                         TabPill(s.pageNumber, tab == 2, Modifier.weight(1f)) { tab = 2 }
                     }
-                    Column(Modifier.fillMaxWidth().heightIn(max = 250.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
                         if (tab == 0) {
                             // looks: small previews of YOUR page
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -250,6 +263,19 @@ fun ReviewScreen(vm: AppVM) {
                                 when (cur.mode) { "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint; else -> s.clarityHint },
                                 fontSize = 12.sp, color = cs.onSurfaceVariant,
                             )
+                            // text clarity: its own slider for every look except "Original" (there the slider above already is the text clarity)
+                            if (cur.mode != "orig") {
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(s.clarity, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("${cur.oClarity}%", fontSize = 15.sp, color = cs.primary, fontWeight = FontWeight.Bold)
+                                }
+                                Slider(
+                                    value = cur.oClarity.toFloat(), onValueChange = { vm.setLook(cur.id, text = it.roundToInt()) },
+                                    valueRange = 0f..100f,
+                                )
+                                Text(s.textHint, fontSize = 12.sp, color = cs.onSurfaceVariant)
+                            }
                         } else {
                             if (tab == 1) SizeControls(vm) else NumberControls(vm)
                         }
@@ -318,9 +344,21 @@ fun ReviewScreen(vm: AppVM) {
 @Composable
 private fun rememberPageBitmap(pg: Page): State<ImageBitmap?> {
     val path = (if (pg.needsPrev) pg.prev else null) ?: pg.cropped
-    return produceState<ImageBitmap?>(path?.let { cachedBitmap(it, 1400) }, path) {
+    val raw by produceState<ImageBitmap?>(path?.let { cachedBitmap(it, 1400) }, path) {
         if (path != null) value = withContext(Dispatchers.IO) { decodeBitmap(path, 1400) }
     }
+    val rot = pg.rot
+    // Rotate = instant: the picture that is already on the screen is simply turned (nothing is re-made, no waiting)
+    return rememberUpdatedState(remember(raw, rot) { raw?.let { turned(it, rot) } })
+}
+
+/** A picture turned clockwise by quarter turns (a 1400 px picture takes a few milliseconds). */
+private fun turned(b: ImageBitmap, turns: Int): ImageBitmap {
+    val t = ((turns % 4) + 4) % 4
+    if (t == 0) return b
+    val src = b.asAndroidBitmap()
+    val m = android.graphics.Matrix().apply { postRotate(90f * t) }
+    return android.graphics.Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true).asImageBitmap()
 }
 
 /**
@@ -328,8 +366,14 @@ private fun rememberPageBitmap(pg: Page): State<ImageBitmap?> {
  * when it is ready, a bright line wipes across the page and reveals the new look over the old one.
  */
 @Composable
-private fun EffectPage(pg: Page) {
+private fun EffectPage(pg: Page, onZoomed: (Boolean) -> Unit = {}) {
     val s = LocalStr.current
+    // pinch with two fingers to zoom, drag to move (when zoomed), double tap to zoom in / back
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var pan by remember { mutableStateOf(Offset.Zero) }
+    val zoomedNow = zoom > 1.01f
+    LaunchedEffect(zoomedNow) { onZoomed(zoomedNow) }
+    DisposableEffect(Unit) { onDispose { onZoomed(false) } }
     val bmp by rememberPageBitmap(pg)
     val working = pg.needsPrev && pg.prevKey != pg.look
     var shownKey by remember { mutableStateOf("") }
@@ -356,8 +400,57 @@ private fun EffectPage(pg: Page) {
     val busyA by animateFloatAlways(if (working) 1f else 0f, tween(250), "busy")
     val label = if (pg.prevKey.substringBefore(':') != pg.mode) s.applyingEffect else s.enhancing
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))) {
+    Box(
+        Modifier.fillMaxSize().clipToBounds()
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = { tap ->
+                    val c = Offset(size.width / 2f, size.height / 2f)
+                    if (zoom > 1.01f) { zoom = 1f; pan = Offset.Zero }
+                    else {
+                        val nz = 2.5f
+                        val t = (c - tap) * (nz - 1f)
+                        zoom = nz
+                        pan = Offset(t.x.coerceIn(-size.width * (nz - 1f) / 2f, size.width * (nz - 1f) / 2f),
+                            t.y.coerceIn(-size.height * (nz - 1f) / 2f, size.height * (nz - 1f) / 2f))
+                    }
+                })
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val ev = awaitPointerEvent()
+                        val two = ev.changes.count { it.pressed } >= 2
+                        // one finger on a page that is not zoomed stays free for the pager (swipe to the next page)
+                        if (two || zoom > 1.01f) {
+                            val z = ev.calculateZoom()
+                            val p = ev.calculatePan()
+                            if (z != 1f || p != Offset.Zero) {
+                                val z0 = zoom
+                                val nz = (z0 * z).coerceIn(1f, 6f)
+                                if (nz <= 1.01f) { zoom = 1f; pan = Offset.Zero }
+                                else {
+                                    val c = Offset(size.width / 2f, size.height / 2f)
+                                    val f = ev.calculateCentroid(useCurrent = false)
+                                    val raw = f + p - c - (f - c - pan) * (nz / z0)      // the point under the fingers stays under the fingers
+                                    val mx = size.width * (nz - 1f) / 2f
+                                    val my = size.height * (nz - 1f) / 2f
+                                    zoom = nz
+                                    pan = Offset(raw.x.coerceIn(-mx, mx), raw.y.coerceIn(-my, my))
+                                }
+                                ev.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        }
+                    } while (ev.changes.any { it.pressed })
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(
+            Modifier.fillMaxSize()
+                .graphicsLayer { scaleX = zoom; scaleY = zoom; translationX = pan.x; translationY = pan.y }
+                .clip(RoundedCornerShape(10.dp)),
+        ) {
             val cur = shown ?: return@Canvas
             val sc = min(this.size.width / cur.width, this.size.height / cur.height)
             val dw = cur.width * sc; val dh = cur.height * sc
@@ -514,9 +607,10 @@ private fun NumberSizePicker(sizes: List<Int>, selected: Int, onPick: (Int) -> U
 private fun LookTile(p: Page, mode: String, label: String, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val sel = p.mode == mode
-    val bmp by produceState<ImageBitmap?>(p.thumbs?.let { cachedBitmap("${it}_$mode.jpg", 200) }, p.thumbs, mode) {
+    val raw by produceState<ImageBitmap?>(p.thumbs?.let { cachedBitmap("${it}_$mode.jpg", 200) }, p.thumbs, mode) {
         value = p.thumbs?.let { withContext(Dispatchers.IO) { decodeBitmap("${it}_$mode.jpg", 200) } }
     }
+    val bmp = remember(raw, p.rot) { raw?.let { turned(it, p.rot) } }
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.fillMaxWidth().height(62.dp).clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant)
@@ -605,9 +699,10 @@ private fun ThumbStrip(vm: AppVM, selected: Int, onSelect: (Int) -> Unit) {
                             if (!isDrag) atFullSpeed { x.animateTo(slot, tween(230, easing = FastOutSlowInEasing)) }
                         }
                         val lift by animateFloatAlways(if (isDrag) 1.14f else 1f, tween(160), "lift")
-                        val bmp by produceState<ImageBitmap?>(p.cropped?.let { cachedBitmap(it, 160) }, p.cropped) {
+                        val raw by produceState<ImageBitmap?>(p.cropped?.let { cachedBitmap(it, 160) }, p.cropped) {
                             value = p.cropped?.let { withContext(Dispatchers.IO) { decodeBitmap(it, 160) } }
                         }
+                        val bmp = remember(raw, p.rot) { raw?.let { turned(it, p.rot) } }
                         Box(
                             Modifier.size(itemW, 56.dp).zIndex(if (isDrag) 1f else 0f)
                                 .graphicsLayer {
