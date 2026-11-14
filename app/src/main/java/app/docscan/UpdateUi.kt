@@ -31,7 +31,11 @@ import java.util.Locale
 
 private fun mb(bytes: Long) = String.format(Locale.US, "%.1f MB", bytes / 1048576.0)
 
-/** The "Update now?" question (only on the Home screen, never in the middle of a scan), the download progress and the install permission. */
+/**
+ * The "Update now?" question, the download progress and the install permission.
+ * The question shows on Home and Settings only (never in the middle of a scan): "Check for updates" in Settings answers right there,
+ * and an automatic find waits until the person is back on Home.
+ */
 @Composable
 fun UpdateDialogs(vm: AppVM) {
     val s = LocalStr.current
@@ -39,7 +43,7 @@ fun UpdateDialogs(vm: AppVM) {
     val ctx = LocalContext.current
     val info = vm.update
 
-    if (vm.updateAsk && info != null && vm.screen == Screen.Home && vm.updateProgress == null) {
+    if (vm.updateAsk && info != null && (vm.screen == Screen.Home || vm.screen == Screen.Settings) && vm.updateProgress == null) {
         AlertDialog(
             onDismissRequest = { vm.updateAsk = false },
             title = { Text(s.updAvail(info.build), fontWeight = FontWeight.Bold) },

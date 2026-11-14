@@ -144,7 +144,11 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (!on) { update = null; updateAsk = false }
     }
 
-    /** manual = the person pressed "Check for updates": always answer. Automatic: ask about each build only once per run. */
+    /**
+     * manual = the person pressed "Check for updates": always answer.
+     * Automatic: while a newer build is not installed, ask once every time the app is opened (this set lives as long as the app
+     * is open; "Later" hides the question until the app is closed completely and opened again. The Home card stays meanwhile).
+     */
     suspend fun checkUpdate(manual: Boolean) {
         if (!Updater.canSelfUpdate()) { if (manual) toast(str.updDev); return }
         if (checkingUpdate || updateProgress != null) return
@@ -184,9 +188,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { try { Engine.warmUp() } catch (_: Exception) { } }
-        // a few seconds after start, then every 10 minutes while the app stays open (GitHub allows 60 asks / hour)
+        // right after start, then every 10 minutes while the app stays open (GitHub allows 60 asks / hour)
         viewModelScope.launch {
-            delay(8_000)
+            delay(2_000)
             while (true) {
                 if (autoUpdate && Updater.canSelfUpdate()) checkUpdate(false)
                 delay(10 * 60 * 1000L)
