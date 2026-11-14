@@ -36,17 +36,20 @@ data class Page(
     val w: Int, val h: Int,           // its size
     val cropped: String? = null,      // straightened page
     val quad: List<Offset>? = null,   // the 4 corners (in the working photo)
-    val mode: String = "orig",        // orig (default: the picture as photographed) | color | color | vivid | gray | bw
+    val mode: String = "orig",        // orig (default: the picture as photographed) | color | vivid | gray | bw
     val clarity: Int = 60,            // 0..100, the one text-clarity slider (color / vivid / gray / bw)
     val oClarity: Int = 0,            // the same slider for "orig": 0 = picture exactly as photographed
     val prev: String? = null,         // preview of the chosen look
     val prevKey: String = "",
+    val prevSide: Int = 0,            // long side of that preview (a quick small one first, the big one when the person pauses)
     val thumbs: String? = null,       // prefix of the small look previews
 ) {
     /** The clarity value that belongs to the chosen look. */
     val eff: Int get() = if (mode == "orig") oClarity else clarity
     /** Changes whenever the look changes: a preview is up to date when prevKey == key. */
     val look: String get() = "$mode:$eff"
+    /** Original with no clarity needs no preview file at all: the straightened page itself is shown (nothing to load twice). */
+    val needsPrev: Boolean get() = !(mode == "orig" && oClarity <= 0)
 }
 
 class Saved(val place: String, val files: List<File>)
@@ -74,10 +77,44 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun chooseLang(v: String) { lang = v; prefs.edit().putString("lang", v).apply() }
     fun chooseAutoCrop(on: Boolean) { autoCrop = on; prefs.edit().putBoolean("autoCrop", on).apply() }
     fun chooseFmt(v: String) { fmt = v; prefs.edit().putString("fmt", v).apply() }
-    fun choosePdfSize(v: String) { pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
+    fun choosePdfSize(v: String) { checkpoint("size"); pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
     fun setTree(v: String?) { treeUri = v; prefs.edit().putString("tree", v).apply() }
-    fun chooseNumPos(v: String) { numPos = v; prefs.edit().putString("numPos", v).apply() }
-    fun chooseNumSize(v: Int) { numSize = v; prefs.edit().putInt("numSize", v).apply() }
+    fun chooseNumPos(v: String) { checkpoint("numpos"); numPos = v; prefs.edit().putString("numPos", v).apply() }
+    fun chooseNumSize(v: Int) { checkpoint("numsize"); numSize = v; prefs.edit().putInt("numSize", v).apply() }
+
+    // ------------------------------------------------------------ undo (looks, page number, page size) and reset all
+    private class Snap(val looks: Map<String, Triple<String, Int, Int>>, val numPos: String, val numSize: Int, val pdfSize: String)
+    private val undoStack = ArrayList<Snap>()
+    private var lastKey = ""
+    private var lastAt = 0L
+    var undoCount by mutableIntStateOf(0)
+        private set
+
+    /** Remembers the state before an edit. Many small edits of the same kind in a row (a slider drag) are ONE undo step. */
+    private fun checkpoint(key: String?) {
+        val now = System.currentTimeMillis()
+        if (key != null && key == lastKey && now - lastAt < 700) { lastAt = now; return }
+        lastKey = key ?: ""; lastAt = now
+        undoStack.add(Snap(pages.associate { it.id to Triple(it.mode, it.clarity, it.oClarity) }, numPos, numSize, pdfSize))
+        if (undoStack.size > 40) undoStack.removeAt(0)
+        undoCount = undoStack.size
+    }
+
+    fun undo() {
+        val snap = undoStack.removeLastOrNull() ?: return
+        for (p in pages.toList()) snap.looks[p.id]?.let { (m, c, o) -> upd(p.id) { it.copy(mode = m, clarity = c, oClarity = o) } }
+        numPos = snap.numPos; numSize = snap.numSize; pdfSize = snap.pdfSize
+        prefs.edit().putString("numPos", numPos).putInt("numSize", numSize).putString("pdfSize", pdfSize).apply()
+        lastKey = ""; undoCount = undoStack.size
+    }
+
+    /** Everything back to the start EXCEPT the crop: every page = Original with no change, no page number, page size = picture size. */
+    fun resetAll() {
+        checkpoint(null)
+        for (p in pages.toList()) upd(p.id) { it.copy(mode = "orig", clarity = 60, oClarity = 0) }
+        numPos = "off"; numSize = 12; pdfSize = "fit"
+        prefs.edit().putString("numPos", numPos).putInt("numSize", numSize).putString("pdfSize", pdfSize).apply()
+    }
 
     var screen by mutableStateOf(Screen.Home)
     val pages = mutableStateListOf<Page>()
@@ -233,7 +270,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val dst = file(id, "crop")
         Engine.crop(p.work, quad, dst)
         del(p.cropped); del(p.prev)
-        upd(id) { it.copy(cropped = dst, quad = quad, prev = null, prevKey = "", thumbs = null) }
+        upd(id) { it.copy(cropped = dst, quad = quad, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
     }
 
     /** The page being cropped is done (or discarded): go on with the queue. */
@@ -257,7 +294,12 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ page editing
     /** Picks the look and / or moves the clarity slider (the slider value belongs to the look that is chosen). */
-    fun setLook(id: String, mode: String? = null, clarity: Int? = null) = upd(id) { p ->
+    fun setLook(id: String, mode: String? = null, clarity: Int? = null) {
+        checkpoint(if (mode != null) null else "clarity:$id")
+        setLookNow(id, mode, clarity)
+    }
+
+    private fun setLookNow(id: String, mode: String?, clarity: Int?) = upd(id) { p ->
         val m = mode ?: p.mode
         val q = p.copy(mode = m)
         when {
@@ -268,17 +310,19 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun applyLookToAll(from: Page) {
+        checkpoint(null)
         for (p in pages.toList()) upd(p.id) { it.copy(mode = from.mode, clarity = from.clarity, oClarity = from.oClarity) }
     }
 
-    suspend fun ensurePreview(id: String) {
+    suspend fun ensurePreview(id: String, side: Int = 1400) {
         val p = page(id) ?: return
         val c = p.cropped ?: return
+        if (!p.needsPrev) return
         val key = p.look
-        if (p.prev != null && p.prevKey == key) return
+        if (p.prev != null && p.prevKey == key && p.prevSide >= side) return
         val dst = file(id, "prev")
         try {
-            Engine.render(c, dst, p.mode, p.eff, 1400)
+            Engine.render(c, dst, p.mode, p.eff, side)
         } catch (e: CancellationException) {
             File(dst).delete(); throw e
         } catch (e: Exception) {
@@ -287,7 +331,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val now = page(id)
         if (now == null) { File(dst).delete(); return }
         del(now.prev)
-        upd(id) { it.copy(prev = dst, prevKey = key) }
+        upd(id) { it.copy(prev = dst, prevKey = key, prevSide = side) }
     }
 
     suspend fun ensureThumbs(id: String) {
@@ -307,7 +351,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             val dst = file(id, "crop")
             Engine.rotate(c, dst, 1)
             del(c); del(p.prev)
-            upd(id) { it.copy(cropped = dst, prev = null, prevKey = "", thumbs = null) }
+            upd(id) { it.copy(cropped = dst, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
         } catch (e: Exception) {
             toast(str.errPrefix + (e.message ?: ""))
         } finally { busy = null }
@@ -331,6 +375,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     fun clearAll() {
         pages.clear(); cropQueue = emptyList(); current = 0; saved = null
+        undoStack.clear(); undoCount = 0
         sessionDir.deleteRecursively(); sessionDir.mkdirs()
         screen = Screen.Home
     }
@@ -366,14 +411,27 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 }
 
+/** Decoded pictures stay in memory (about 1/8 of the app's memory): a picture is never decoded twice while it is in use. */
+private val bitmapCache = object : android.util.LruCache<String, ImageBitmap>(
+    (Runtime.getRuntime().maxMemory() / 8).toInt().coerceAtLeast(8 * 1024 * 1024),
+) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int = value.width * value.height * 4
+}
+
+/** The picture if it is already decoded (instant, no waiting), else null. */
+fun cachedBitmap(path: String, maxSide: Int): ImageBitmap? = bitmapCache.get("$path@$maxSide")
+
 /** Decodes a picture file, no bigger than about maxSide pixels on the long side. */
 fun decodeBitmap(path: String, maxSide: Int): ImageBitmap? {
+    cachedBitmap(path, maxSide)?.let { return it }
     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(path, o)
     var sample = 1
     while (max(o.outWidth, o.outHeight) / (sample * 2) >= maxSide) sample *= 2
     val o2 = BitmapFactory.Options().apply { inSampleSize = sample }
-    return BitmapFactory.decodeFile(path, o2)?.asImageBitmap()
+    val bmp = BitmapFactory.decodeFile(path, o2)?.asImageBitmap()
+    if (bmp != null) bitmapCache.put("$path@$maxSide", bmp)
+    return bmp
 }
 
 /** Camera / gallery photo -> upright working JPEG (EXIF turned, long side <= maxSide). Native and fast. Returns (w, h). */

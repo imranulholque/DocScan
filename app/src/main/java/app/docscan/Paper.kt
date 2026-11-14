@@ -140,3 +140,55 @@ fun PaperPreview(
         }
     }
 }
+
+/** A tiny page: the six places for the number. The chosen place shows a bold "1" in a coloured box; tap another place to move it. */
+@Composable
+fun NumberSpotPicker(pos: String, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val cs = MaterialTheme.colorScheme
+    val on = cs.primary
+    val line = cs.outline
+    val paint = remember {
+        android.graphics.Paint().apply { isAntiAlias = true; color = android.graphics.Color.WHITE; typeface = Fonts.typeface(ctx); textAlign = android.graphics.Paint.Align.CENTER }
+    }
+    val spots = Paper.positions
+    fun center(sp: String, w: Float, h: Float): Offset {
+        val fx = when (sp[1]) { 'l' -> 0.2f; 'r' -> 0.8f; else -> 0.5f }
+        val fy = if (sp[0] == 't') 0.12f else 0.88f
+        return Offset(fx * w, fy * h)
+    }
+    // smooth movement of the chosen box
+    val target = center(if (pos == "off") "bc" else pos, 1f, 1f)
+    val px by animateFloatAsState(target.x, tween(220, easing = FastOutSlowInEasing), label = "px")
+    val py by animateFloatAsState(target.y, tween(220, easing = FastOutSlowInEasing), label = "py")
+    Canvas(
+        modifier.size(84.dp, 112.dp).pointerInput(Unit) {
+            detectTapGestures { off ->
+                val w = this.size.width.toFloat(); val h = this.size.height.toFloat()
+                var best = spots[0]; var bd = Float.MAX_VALUE
+                for (sp in spots) {
+                    val d = (center(sp, w, h) - off).getDistance()
+                    if (d < bd) { bd = d; best = sp }
+                }
+                onPick(best)
+            }
+        },
+    ) {
+        val w = this.size.width; val h = this.size.height
+        drawRoundRect(Color.White, Offset.Zero, Size(w, h), CornerRadius(10f, 10f))
+        drawRoundRect(line, Offset.Zero, Size(w, h), CornerRadius(10f, 10f), style = Stroke(width = 2f))
+        for (i in 0 until 6) {
+            val y = h * (0.27f + i * 0.085f)
+            drawLine(Color(0xFFD5D9E4), Offset(w * 0.2f, y), Offset(w * (if (i == 5) 0.55f else 0.8f), y), strokeWidth = 4f, cap = StrokeCap.Round)
+        }
+        for (sp in spots) {
+            val c = center(sp, w, h)
+            drawCircle(Color(0xFFB4BACB), w * 0.045f, c)          // the other places: small dots
+        }
+        val r = w * 0.13f
+        val cx = px * w; val cy = py * h
+        drawRoundRect(on, Offset(cx - r, cy - r), Size(2 * r, 2 * r), CornerRadius(r * 0.45f, r * 0.45f))
+        paint.textSize = r * 1.7f
+        drawContext.canvas.nativeCanvas.drawText("1", cx, cy + r * 0.58f, paint)
+    }
+}

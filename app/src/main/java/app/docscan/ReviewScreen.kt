@@ -45,6 +45,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -125,17 +126,21 @@ fun ReviewScreen(vm: AppVM) {
     val cur = pages.getOrNull(pager.currentPage)
     LaunchedEffect(cur?.id, cur?.look, cur?.cropped) {
         val c = cur ?: return@LaunchedEffect
-        if (c.prev != null && c.prevKey != c.look) delay(300)
-        vm.ensurePreview(c.id)
+        if (!c.needsPrev) return@LaunchedEffect              // Original: nothing to make, the page is shown as it is
+        if (c.prev != null && c.prevKey != c.look) delay(100)
+        vm.ensurePreview(c.id, 640)                          // a quick small preview first: moving the slider feels instant
+        delay(450)
+        vm.ensurePreview(c.id, 1400)                         // the sharp one when the finger rests
     }
     LaunchedEffect(cur?.id, cur?.cropped, cur?.thumbs) {
         val c = cur ?: return@LaunchedEffect
         if (c.thumbs == null) vm.ensureThumbs(c.id)
     }
 
-    var tab by remember { mutableIntStateOf(0) }            // 0 = effect, 1 = page size & page number
+    var tab by remember { mutableIntStateOf(0) }            // 0 = effect, 1 = page size, 2 = page number
     var exportMode by remember { mutableStateOf<String?>(null) }
     var askDelete by remember { mutableStateOf(false) }
+    var askReset by remember { mutableStateOf(false) }
 
     fun go(mode: String) {
         scope.launch {
@@ -161,6 +166,8 @@ fun ReviewScreen(vm: AppVM) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.screen = Screen.Home }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, s.back) }
             Text(s.pageOf(pager.currentPage + 1, pages.size), fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.undo() }, enabled = vm.undoCount > 0) { Text("↶ " + s.undo, fontWeight = FontWeight.Bold) }
+            TextButton(onClick = { askReset = true }) { Text(s.resetAll, fontWeight = FontWeight.Bold) }
         }
 
         // page thumbnails
@@ -170,7 +177,7 @@ fun ReviewScreen(vm: AppVM) {
         ) {
             itemsIndexed(pages, key = { _, p -> p.id }) { i, p ->
                 val sel = i == pager.currentPage
-                val bmp by produceState<ImageBitmap?>(null, p.cropped) {
+                val bmp by produceState<ImageBitmap?>(p.cropped?.let { cachedBitmap(it, 160) }, p.cropped) {
                     value = p.cropped?.let { withContext(Dispatchers.IO) { decodeBitmap(it, 160) } }
                 }
                 Box(
@@ -187,8 +194,8 @@ fun ReviewScreen(vm: AppVM) {
             }
         }
 
-        // what the saved page will look like (only on the "Page & number" tab)
-        if (tab == 1) {
+        // what the saved page will look like (on the page size and page number tabs)
+        if (tab != 0) {
             val paperNow = if (vm.fmt == "pdf") vm.pdfSize else "fit"
             Text(
                 s.previewCaption + " · " + Paper.label(paperNow, s) + (Paper.mm(paperNow)?.let { " ($it)" } ?: ""),
@@ -221,9 +228,10 @@ fun ReviewScreen(vm: AppVM) {
                     // two tabs: effect | page size & page number (both show a live preview above)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TabPill(s.tabEffect, tab == 0, Modifier.weight(1f)) { tab = 0 }
-                        TabPill(s.tabLayout, tab == 1, Modifier.weight(1f)) { tab = 1 }
+                        TabPill(s.tabSize, tab == 1, Modifier.weight(1f)) { tab = 1 }
+                        TabPill(s.pageNumber, tab == 2, Modifier.weight(1f)) { tab = 2 }
                     }
-                    Column(Modifier.fillMaxWidth().heightIn(max = 290.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 250.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
                         if (tab == 0) {
                             // looks: small previews of YOUR page
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -250,7 +258,7 @@ fun ReviewScreen(vm: AppVM) {
                                 fontSize = 12.sp, color = cs.onSurfaceVariant,
                             )
                         } else {
-                            LayoutControls(vm)
+                            if (tab == 1) SizeControls(vm) else NumberControls(vm)
                         }
                     }
 
@@ -278,6 +286,14 @@ fun ReviewScreen(vm: AppVM) {
 
     exportMode?.let { mode ->
         ExportDialog(vm, mode, onDismiss = { exportMode = null }, onGo = { exportMode = null; go(mode) })
+    }
+    if (askReset) {
+        AlertDialog(
+            onDismissRequest = { askReset = false },
+            text = { Text(s.resetAsk, fontSize = 17.sp) },
+            confirmButton = { TextButton(onClick = { askReset = false; vm.resetAll(); vm.toast(s.resetDone) }) { Text(s.resetAll, color = cs.error) } },
+            dismissButton = { TextButton(onClick = { askReset = false }) { Text(s.cancel) } },
+        )
     }
     if (askDelete) {
         AlertDialog(
@@ -309,8 +325,8 @@ fun ReviewScreen(vm: AppVM) {
 /** The picture of a page (the filtered preview when there is one). Keeps the old picture while a new one loads. */
 @Composable
 private fun rememberPageBitmap(pg: Page): State<ImageBitmap?> {
-    val path = pg.prev ?: pg.cropped
-    return produceState<ImageBitmap?>(null, path) {
+    val path = (if (pg.needsPrev) pg.prev else null) ?: pg.cropped
+    return produceState<ImageBitmap?>(path?.let { cachedBitmap(it, 1400) }, path) {
         if (path != null) value = withContext(Dispatchers.IO) { decodeBitmap(path, 1400) }
     }
 }
@@ -323,16 +339,21 @@ private fun rememberPageBitmap(pg: Page): State<ImageBitmap?> {
 private fun EffectPage(pg: Page) {
     val s = LocalStr.current
     val bmp by rememberPageBitmap(pg)
-    val working = pg.prevKey != pg.look
+    val working = pg.needsPrev && pg.prevKey != pg.look
+    var shownKey by remember { mutableStateOf("") }
     var shown by remember { mutableStateOf<ImageBitmap?>(null) }
     var old by remember { mutableStateOf<ImageBitmap?>(null) }
     val wipe = remember { Animatable(1f) }
     LaunchedEffect(bmp) {
         val b = bmp ?: return@LaunchedEffect
         val cur = shown
+        val k = if (pg.needsPrev && pg.prev != null) pg.prevKey else pg.look
         if (cur == null) {
-            shown = b; wipe.snapTo(1f)
+            shown = b; shownKey = k; wipe.snapTo(1f)
+        } else if (b !== cur && k == shownKey) {
+            shown = b                                         // same look, sharper picture: swap quietly, no wipe
         } else if (b !== cur) {
+            shownKey = k
             old = cur; shown = b
             wipe.snapTo(0f)
             wipe.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
@@ -414,9 +435,9 @@ private fun TabPill(label: String, selected: Boolean, modifier: Modifier, onClic
     }
 }
 
-/** Output format, PDF page size and page number (position + size). The page above changes live. */
+/** Tab "Page size": output format and PDF paper size. The page above changes live. */
 @Composable
-private fun LayoutControls(vm: AppVM) {
+private fun SizeControls(vm: AppVM) {
     val s = LocalStr.current
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -427,41 +448,59 @@ private fun LayoutControls(vm: AppVM) {
     if (vm.fmt == "pdf") {
         Text(s.pdfSize, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
         PdfSizeRow(vm)
+    } else {
+        Text(s.sizeFitHint, fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
     }
-    // ---- page number: one clear switch, then (only when on) where it goes and how big
+}
+
+/** Tab "Page number": one switch; when on, a small page to tap the place + a size stepper. Compact on purpose. */
+@Composable
+private fun NumberControls(vm: AppVM) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
     val on = vm.numPos != "off"
-    Surface(
-        shape = RoundedCornerShape(16.dp), color = if (on) cs.primaryContainer else cs.surfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(top = 14.dp).clickable { vm.chooseNumPos(if (on) "off" else "bc") },
-    ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(s.numOnTitle, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (on) cs.onPrimaryContainer else cs.onSurface)
-                Text(
-                    if (on) s.numOnHint else s.numOffHint, fontSize = 12.sp,
-                    color = if (on) cs.onPrimaryContainer else cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Switch(checked = on, onCheckedChange = { vm.chooseNumPos(if (it) "bc" else "off") })
+    var last by remember { mutableStateOf("bc") }
+    if (on) last = vm.numPos
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(s.numOnTitle, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(if (on) s.numOnHint else s.numOffHint, fontSize = 12.sp, color = cs.onSurfaceVariant)
         }
+        Switch(checked = on, onCheckedChange = { vm.chooseNumPos(if (it) last else "off") })
     }
     AnimatedVisibility(visible = on, enter = fadeIn(tween(200)) + expandVertically(tween(250)), exit = fadeOut(tween(150)) + shrinkVertically(tween(200))) {
-        Column(Modifier.fillMaxWidth()) {
-            SectionLabel(s.numWhere)
-            for (row in listOf("t" to s.numTop, "b" to s.numBottom)) {
-                Text(row.second, fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp, top = 2.dp))
-                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Choice(s.numLeft, vm.numPos == row.first + "l", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "l") }
-                    Choice(s.numCenter, vm.numPos == row.first + "c", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "c") }
-                    Choice(s.numRight, vm.numPos == row.first + "r", Modifier.weight(1f)) { vm.chooseNumPos(row.first + "r") }
+        Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                NumberSpotPicker(vm.numPos, { vm.chooseNumPos(it) })
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s.numWhere, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    Text(s.posName(vm.numPos), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = cs.primary)
+                    Text(s.numSizeLabel, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
+                    val idx = Paper.numSizes.indexOf(vm.numSize).let { if (it < 0) 1 else it }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StepBtn("−", idx > 0) { vm.chooseNumSize(Paper.numSizes[idx - 1]) }
+                        Text(
+                            "${Paper.numSizes[idx]} pt", fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center, modifier = Modifier.width(68.dp),
+                        )
+                        StepBtn("+", idx < Paper.numSizes.size - 1) { vm.chooseNumSize(Paper.numSizes[idx + 1]) }
+                    }
                 }
             }
-            SectionLabel(s.numLook)
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (n in Paper.numSizes) Choice("$n", vm.numSize == n) { vm.chooseNumSize(n) }
-            }
-            Text(s.numFont, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        }
+    }
+}
+
+@Composable
+private fun StepBtn(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.size(38.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onClick),
+        shape = CircleShape, color = if (enabled) cs.primaryContainer else cs.surface,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = if (enabled) cs.onPrimaryContainer else cs.outline)
         }
     }
 }
@@ -470,7 +509,7 @@ private fun LayoutControls(vm: AppVM) {
 private fun LookTile(p: Page, mode: String, label: String, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val sel = p.mode == mode
-    val bmp by produceState<ImageBitmap?>(null, p.thumbs, mode) {
+    val bmp by produceState<ImageBitmap?>(p.thumbs?.let { cachedBitmap("${it}_$mode.jpg", 200) }, p.thumbs, mode) {
         value = p.thumbs?.let { withContext(Dispatchers.IO) { decodeBitmap("${it}_$mode.jpg", 200) } }
     }
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {

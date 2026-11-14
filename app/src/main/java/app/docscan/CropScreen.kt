@@ -108,7 +108,7 @@ private fun CropBody(vm: AppVM, page: Page) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    val bmp by produceState<ImageBitmap?>(null, page.work) {
+    val bmp by produceState<ImageBitmap?>(cachedBitmap(page.work, 1800), page.work) {
         value = withContext(Dispatchers.IO) { decodeBitmap(page.work, 1800) }
     }
     val quad = remember { mutableStateListOf<Offset>() }
@@ -310,13 +310,17 @@ private fun CropBody(vm: AppVM, page: Page) {
                         drawCircle(Color.White, stroke * 2.2f, Offset(x, y))
                     }
                     // 6. corner brackets that move in and out
-                    val inset = min(iw, ih) * 0.05f * breathe2
+                    val gap: Float = min(iw, ih) * 0.05f * breathe2
+                    val bx0: Float = ox + gap
+                    val by0: Float = oy + gap
+                    val bx1: Float = ox + iw - gap
+                    val by1: Float = oy + ih - gap
                     val bl = min(iw, ih) * 0.11f
                     val bc = Color.White
                     val bs = stroke * 2.4f
                     val cs4 = listOf(
-                        Offset(ox + inset, oy + inset) to (1f to 1f), Offset(ox + iw - inset, oy + inset) to (-1f to 1f),
-                        Offset(ox + iw - inset, oy + ih - inset) to (-1f to -1f), Offset(ox + inset, oy + ih - inset) to (1f to -1f),
+                        Offset(bx0, by0) to (1f to 1f), Offset(bx1, by0) to (-1f to 1f),
+                        Offset(bx1, by1) to (-1f to -1f), Offset(bx0, by1) to (1f to -1f),
                     )
                     for ((p0, dd) in cs4) {
                         drawLine(bc, p0, Offset(p0.x + dd.first * bl, p0.y), strokeWidth = bs, cap = StrokeCap.Round)
