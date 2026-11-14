@@ -389,23 +389,25 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
             } else shown[8] += (0f - shown[8]) * 0.2f
             val va = shown[8]
 
-            // 1) no page seen yet: the plain dashed guide frame. On capture it closes in a little and turns teal, then relaxes back.
+            // where the camera picture really is on the screen (it is shown whole, centred: black bars above / below)
+            val ar = guide.aspect
+            val dw = if (W / H < ar) W else H * ar
+            val dh = if (W / H < ar) W / ar else H
+            val ox = (W - dw) / 2f; val oy = (H - dh) / 2f
+
+            // 1) no page seen yet: the plain dashed guide frame, INSIDE the camera picture. On capture it closes in a little and turns teal, then relaxes back.
             if (va < 0.98f) {
-                val mx = W * 0.08f + f * 14f
-                val my = H * 0.16f + f * 14f
+                val mx = dw * 0.07f + f * 14f
+                val my = dh * 0.07f + f * 14f
                 val c = androidx.compose.ui.graphics.lerp(Color(0xCCFFFFFF), Color(0xFF5EEAD4), f)
                 drawRoundRect(
                     c.copy(alpha = c.alpha * (1f - va)),
-                    Offset(mx, my), Size(W - 2 * mx, H - 2 * my - H * 0.08f),
+                    Offset(ox + mx, oy + my), Size(dw - 2 * mx, dh - 2 * my),
                     CornerRadius(24f, 24f), style = Stroke(width = 3f + 4f * f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 16f))),
                 )
             }
             // 2) the live outline of the page: everything that is not paper is darkened (= what the crop throws away)
             if (va > 0.02f) {
-                val ar = guide.aspect
-                val dw = if (W / H < ar) W else H * ar
-                val dh = if (W / H < ar) W / ar else H
-                val ox = (W - dw) / 2f; val oy = (H - dh) / 2f
                 val pts = List(4) { Offset(ox + shown[2 * it] * dw, oy + shown[2 * it + 1] * dh) }
                 val good = guide.good
                 val col = androidx.compose.ui.graphics.lerp(if (good) Color(0xFF3DDC84) else Color(0xFFFFD166), Color(0xFF5EEAD4), f)
