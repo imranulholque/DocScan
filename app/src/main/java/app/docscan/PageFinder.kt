@@ -249,6 +249,73 @@ object PageFinder {
         return 0.5 * (sides.sum() / 4.0) + 0.5 * (sides.minOrNull() ?: 0.0)
     }
 
+    /** Fills the holes of a blob: a dark face / shirt / printed picture inside a paper is not "outside" the paper. Returns (filled blob, its pixel count). */
+    private fun fillHoles(lab: BooleanArray, w: Int, h: Int): Pair<BooleanArray, Int> {
+        val total = w * h
+        val outside = BooleanArray(total)
+        val st = IntArray(total)
+        var sp = 0
+        for (x in 0 until w) {
+            val a = x; val b = (h - 1) * w + x
+            if (!lab[a] && !outside[a]) { outside[a] = true; st[sp++] = a }
+            if (!lab[b] && !outside[b]) { outside[b] = true; st[sp++] = b }
+        }
+        for (y in 0 until h) {
+            val a = y * w; val b = y * w + w - 1
+            if (!lab[a] && !outside[a]) { outside[a] = true; st[sp++] = a }
+            if (!lab[b] && !outside[b]) { outside[b] = true; st[sp++] = b }
+        }
+        while (sp > 0) {
+            val p = st[--sp]
+            val x = p % w
+            val y = (p - x) / w
+            if (x > 0 && !lab[p - 1] && !outside[p - 1]) { outside[p - 1] = true; st[sp++] = p - 1 }
+            if (x < w - 1 && !lab[p + 1] && !outside[p + 1]) { outside[p + 1] = true; st[sp++] = p + 1 }
+            if (y > 0 && !lab[p - w] && !outside[p - w]) { outside[p - w] = true; st[sp++] = p - w }
+            if (y < h - 1 && !lab[p + w] && !outside[p + w]) { outside[p + w] = true; st[sp++] = p + w }
+        }
+        var cnt = 0
+        val filled = BooleanArray(total) { val f = !outside[it]; if (f) cnt++; f }
+        return filled to cnt
+    }
+
+    /**
+     * Mask for SMALL things (a passport photo, a card, a note far from the camera). The table colour is the median of the border strip and the
+     * threshold comes from the table's own texture noise, so it does not depend on how big the object is (Otsu does: it splits the table texture
+     * when the object is tiny).
+     */
+    private fun noiseMask(pic: Pic): BooleanArray? {
+        val w = pic.w; val h = pic.h; val n = w * h
+        val m = max(2, (min(w, h) * 0.04).roundToInt())
+        if (m * 2 >= min(w, h)) return null
+        val cnt = n - (w - 2 * m) * (h - 2 * m)
+        if (cnt < 16) return null
+        val rr = FloatArray(cnt); val gg = FloatArray(cnt); val bb = FloatArray(cnt)
+        var k = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            if (x < m || y < m || x >= w - m || y >= h - m) {
+                val i = y * w + x
+                rr[k] = pic.r[i]; gg[k] = pic.g[i]; bb[k] = pic.b[i]; k++
+            }
+        }
+        rr.sort(); gg.sort(); bb.sort()
+        val cr = rr[cnt shr 1]; val cg = gg[cnt shr 1]; val cb = bb[cnt shr 1]
+        val d0 = FloatArray(n) {
+            val dr = pic.r[it] - cr; val dg = pic.g[it] - cg; val db = pic.b[it] - cb
+            sqrt(dr * dr + dg * dg + db * db)
+        }
+        val d = blurF(blurF(d0, w, h, 1), w, h, 1)
+        val bv = FloatArray(cnt)
+        k = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            if (x < m || y < m || x >= w - m || y >= h - m) { bv[k++] = d[y * w + x] }
+        }
+        bv.sort()
+        val p98 = bv[min(cnt - 1, (cnt * 0.98).toInt())]
+        val thr = max(14f, 1.6f * p98)
+        return BooleanArray(n) { d[it] > thr }
+    }
+
     // ------------------------------------------------------------------ coarse finder
     private fun coarseCands(pic: Pic): List<Cand> {
         val w = pic.w; val h = pic.h; val n = w * h
@@ -292,24 +359,25 @@ object PageFinder {
         val u4 = dist(rr[cnt shr 1], gg[cnt shr 1], bl[cnt shr 1])
 
         val t1 = otsu(u1); val t2 = otsu(u2); val t4 = otsu(u4)
-        val masks = listOf(
-            BooleanArray(n) { u2[it] > t2 },
-            BooleanArray(n) { u1[it] > t1 && u2[it] > t2 * 0.7 },
-            BooleanArray(n) { u1[it] > t1 },
-            BooleanArray(n) { u4[it] < t4 },
-            BooleanArray(n) { u4[it] < t4 * 0.6 },
-        )
+        val masks = ArrayList<Pair<BooleanArray, Int>>()   // (mask, blur radius used to clean it)
+        masks.add(BooleanArray(n) { u2[it] > t2 } to 3)
+        masks.add(BooleanArray(n) { u1[it] > t1 && u2[it] > t2 * 0.7 } to 3)
+        masks.add(BooleanArray(n) { u1[it] > t1 } to 3)
+        masks.add(BooleanArray(n) { u4[it] < t4 } to 3)
+        masks.add(BooleanArray(n) { u4[it] < t4 * 0.6 } to 3)
+        noiseMask(pic)?.let { masks.add(it to 1) }          // small objects: light cleaning so they survive
         val cands = ArrayList<Cand>()
-        for (mk in masks) {
-            var a = blurF(FloatArray(n) { if (mk[it]) 1f else 0f }, w, h, 3)
+        for ((mk, rad) in masks) {
+            var a = blurF(FloatArray(n) { if (mk[it]) 1f else 0f }, w, h, rad)
             val c1 = BooleanArray(n) { a[it] > 0.4f }
-            a = blurF(FloatArray(n) { if (c1[it]) 1f else 0f }, w, h, 3)
+            a = blurF(FloatArray(n) { if (c1[it]) 1f else 0f }, w, h, rad)
             val c2 = BooleanArray(n) { a[it] > 0.6f }
             val blob = bigBlob(c2, w, h) ?: continue
-            val lab = blob.first
-            val cnt2 = blob.second
+            val filledBlob = fillHoles(blob.first, w, h)
+            val lab = filledBlob.first
+            val cnt2 = filledBlob.second
             val frac = cnt2.toDouble() / n
-            if (frac < 0.015 || frac > 0.985) continue
+            if (cnt2 < 30 || frac < 0.0015 || frac > 0.985) continue
             val pts = ArrayList<Pt>()
             var cx = 0.0; var cy = 0.0
             for (y in 0 until h) for (x in 0 until w) {
@@ -336,12 +404,7 @@ object PageFinder {
         return cands
     }
 
-    private fun coarseQuad(pic: Pic): Cand? {
-        val all = coarseCands(pic)
-        // big candidates (>= 15%) behave exactly as before; small ones are only a fallback
-        val big = all.filter { it.frac >= 0.15 }.maxByOrNull { it.score }
-        return big ?: all.maxByOrNull { it.score }
-    }
+    private fun coarseQuad(pic: Pic): Cand? = coarseCands(pic).maxByOrNull { it.score }
 
     // ------------------------------------------------------------------ straight-edge refinement
     private fun refineQuad(pic: Pic, q0: List<Pt>, rounds: Int): Pair<List<Pt>, Int> {
@@ -349,6 +412,9 @@ object PageFinder {
         val ch = arrayOf(blurF(pic.r, w, h, 1), blurF(pic.g, w, h, 1), blurF(pic.b, w, h, 1))
         var q = q0
         var band = max(6.0, 0.03 * max(w, h))
+        var minSide = 1e30
+        for (i in 0 until 4) minSide = min(minSide, hypot(q0[(i + 1) % 4].x - q0[i].x, q0[(i + 1) % 4].y - q0[i].y))
+        band = max(2.5, min(band, 0.2 * minSide))   // a small object must not search for its edge 30 px away, into the table
         var moved = 0
         for (round in 0 until rounds) {
             val cx = q.sumOf { it.x } / 4.0
@@ -441,7 +507,7 @@ object PageFinder {
         }
         val k = fine.w.toDouble() / small.w
         var q = best.q.map { Pt(it.x * k, it.y * k) }
-        val found = best.fill > 0.82 && (best.frac > 0.15 || (best.frac > 0.02 && best.con > 25.0))
+        val found = best.fill > 0.82 && (best.frac > 0.15 || best.con > 25.0)
         try {
             val r = refineQuad(fine, q, rounds)
             if (r.second > 0) q = r.first
@@ -493,7 +559,7 @@ object PageFinder {
         val bm = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: throw IllegalStateException("unreadable picture")
         val fine = picOf(bm, 1000)
-        val small = picOf(bm, 420)
+        val small = picOf(bm, 560)
         bm.recycle()
         val (q, found) = findPaper(fine, small, 3)
         val sx = W.toDouble() / fine.w
@@ -504,6 +570,6 @@ object PageFinder {
         val cy = pts.sumOf { it.y } / 4.0
         pts = pts.map { Pt(cx + (it.x - cx) * 0.995, cy + (it.y - cy) * 0.995) }
         val area = polyArea(pts)
-        return (found && area >= 0.015 * W * H) to pts.map { Offset(it.x.toFloat(), it.y.toFloat()) }
+        return (found && area >= 0.0015 * W * H) to pts.map { Offset(it.x.toFloat(), it.y.toFloat()) }
     }
 }
