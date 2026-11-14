@@ -16,8 +16,10 @@ The scanning engine is the **Image Fixer** code, unchanged (`core.py`, `scanner.
   - **Vivid** is for colour pictures (photos, coloured pages): even light, richer colours, sharper picture. The scan looks (Color / Gray / B&W) turn paper white and are meant for black-on-white documents.
   - Changing the look or the slider shows a light sweep + label while it is being made, then a wipe reveals the new look. Auto crop shows a scanning light while it searches and the corners glide to the page.
 - **Page & number** tab (Review screen): format, PDF size (Picture size / A4 / A5 / Letter / Legal) and page number (6 positions, sizes 10-24 pt).
-  The page above shows the result live: paper shape, where the picture sits and the number. PDF numbers are real text in Times-Roman;
-  pictures (JPG/PNG) use the bundled Liberation Serif (Times New Roman look, same widths, SIL OFL licence) from `assets/fonts`.
+  The page above shows the result live: paper shape, where the picture sits and the number. PDF numbers are real **bold** text in Times-Bold;
+  pictures (JPG/PNG) use the bundled Liberation Serif Bold (Times New Roman Bold look, same widths, SIL OFL licence) from `assets/fonts`.
+  One switch turns numbers on; then pick top/bottom + left/center/right and a size. The preview marks the number with a blue box.
+- Photos open the crop screen instantly: the picture is prepared natively (no Python), then the page finder runs with a visible scanning animation.
 
 ## Build the APK on GitHub (no Android Studio needed)
 1. Create a repository, upload everything in this folder (keep the `keystore` folder), commit to `main`.
@@ -45,3 +47,7 @@ Works like Image Fixer's updater, with the same rules:
 - The APK is large (about 80-100 MB) because Python, numpy and OpenCV are inside it.
 - `keystore/docscan.jks` signs the APK. It is a personal sideload key (password inside `app/build.gradle.kts`), so updates always install over each other.
 - Language: Bangla or English (Home screen or Settings).
+
+## Looks (latest)
+- Every new page starts as **Original** (no effect). Pick Color / Vivid / Gray / B&W and use the slider like Lightroom's amount: 0 = original, 60 = the look as designed (default), 100 = stronger.
+- Camera takes about 8 MP photos in low-latency mode (fast shutter, text stays sharp).
