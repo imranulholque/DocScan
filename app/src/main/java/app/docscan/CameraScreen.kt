@@ -14,6 +14,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,7 +33,6 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -44,6 +44,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -54,6 +55,11 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -65,7 +71,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -209,9 +217,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                     Text(s.camHint, Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = Color.White, fontSize = 13.sp)
                 }
                 Spacer(Modifier.weight(1f))
-                GlassButton(onClick = { torch = !torch }, active = torch) {
-                    Text("💡", fontSize = 20.sp)
-                }
+                GlassButton(onClick = { torch = !torch }, active = torch) { FlashIcon(on = torch) }
             }
             Spacer(Modifier.weight(1f))
             Row(
@@ -219,7 +225,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    GlassButton(onClick = { pick.launch("image/*") }, size = 52) { Icon(Icons.Filled.Add, s.gallery, tint = Color.White) }
+                    GalleryThumb(vm.pages.lastOrNull()) { pick.launch("image/*") }
                 }
                 Shutter(pop = flash.value, onClick = { shoot() })
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
@@ -241,7 +247,8 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
 private fun GlassButton(onClick: () -> Unit, size: Int = 44, active: Boolean = false, content: @Composable () -> Unit) {
     Box(
         Modifier.size(size.dp).clip(CircleShape)
-            .background(if (active) Color(0xAAFBBF24) else Color(0x66000000))
+            .background(if (active) Color(0x40FBBF24) else Color(0x66000000))
+            .then(if (active) Modifier.border(1.5.dp, Color(0xFFFBBF24), CircleShape) else Modifier)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
@@ -253,4 +260,56 @@ private fun Shutter(pop: Float, onClick: () -> Unit) {
         Modifier.size(78.dp).graphicsLayer { val k = 1f - 0.12f * pop; scaleX = k; scaleY = k }.border(4.dp, Color.White, CircleShape).padding(7.dp).clip(CircleShape)
             .background(Color.White).clickable(onClick = onClick),
     )
+}
+
+/** Lightning bolt. Off: white outline with a slash through it. On: solid amber. */
+@Composable
+private fun FlashIcon(on: Boolean) {
+    Canvas(Modifier.size(24.dp)) {
+        val k = size.width / 24f
+        fun pt(x: Float, y: Float) = Offset(x * k, y * k)
+        val bolt = Path().apply {
+            moveTo(13.5f * k, 2f * k); lineTo(5f * k, 13.5f * k); lineTo(11f * k, 13.5f * k)
+            lineTo(10f * k, 22f * k); lineTo(19f * k, 10f * k); lineTo(13f * k, 10f * k); close()
+        }
+        if (on) {
+            drawPath(bolt, Color(0xFFFBBF24))
+            drawPath(bolt, Color(0xFFFBBF24), style = Stroke(width = 1.6f * k, join = StrokeJoin.Round))
+        } else {
+            drawPath(bolt, Color.White, style = Stroke(width = 1.8f * k, join = StrokeJoin.Round))
+            drawLine(Color(0xFF111111), pt(4f, 3.6f), pt(20f, 20.4f), strokeWidth = 4.4f * k, cap = StrokeCap.Round)
+            drawLine(Color.White, pt(4f, 3.6f), pt(20f, 20.4f), strokeWidth = 1.8f * k, cap = StrokeCap.Round)
+        }
+    }
+}
+
+/** Small round gallery button: shows the last page of this scan; before the first page a little picture symbol. Opens the gallery. */
+@Composable
+private fun GalleryThumb(last: Page?, onClick: () -> Unit) {
+    val path = last?.let { it.cropped ?: it.work }
+    val bmp by produceState<ImageBitmap?>(path?.let { cachedBitmap(it, 160) }, path) {
+        value = path?.let { withContext(Dispatchers.IO) { decodeBitmap(it, 160) } }
+    }
+    Box(
+        Modifier.size(48.dp).clip(CircleShape).background(Color(0x66000000))
+            .border(2.dp, Color.White, CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        val b = bmp
+        if (b != null) {
+            Image(b, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        } else {
+            Canvas(Modifier.size(22.dp)) {
+                val w = size.width; val h = size.height
+                val st = Stroke(width = w * 0.09f, join = StrokeJoin.Round, cap = StrokeCap.Round)
+                drawRoundRect(Color.White, Offset(w * 0.04f, h * 0.12f), Size(w * 0.92f, h * 0.76f), CornerRadius(w * 0.14f, w * 0.14f), style = st)
+                drawCircle(Color.White, w * 0.09f, Offset(w * 0.32f, h * 0.38f))
+                val hill = Path().apply {
+                    moveTo(w * 0.08f, h * 0.80f); lineTo(w * 0.38f, h * 0.52f); lineTo(w * 0.56f, h * 0.68f)
+                    lineTo(w * 0.72f, h * 0.50f); lineTo(w * 0.92f, h * 0.76f)
+                }
+                drawPath(hill, Color.White, style = st)
+            }
+        }
+    }
 }

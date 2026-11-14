@@ -70,8 +70,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 @Composable
@@ -119,12 +122,9 @@ private fun CropBody(vm: AppVM, page: Page) {
     val drag = remember { DragState() }
 
     // animations: a scanning light while the page is being searched, corners that glide to the page, a pulse when found
-    val inf = rememberInfiniteTransition(label = "crop")
-    // 0 -> 1 once per full trip (down, then back up). It is only READ inside the Canvas draw block below, so the animation
-    // never recomposes the screen: every frame redraws just the picture overlay and stays smooth while the page finder works.
-    val sweepT by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing), RepeatMode.Restart), label = "sweepT")
-    val ants by inf.animateFloat(0f, 36f, infiniteRepeatable(tween(700, easing = LinearEasing)), label = "ants")
-    val breathe by inf.animateFloat(0.35f, 1f, infiniteRepeatable(tween(850), RepeatMode.Reverse), label = "breathe")
+    // One frame clock drives every looping effect below. It is read only inside the Canvas draw block, so the screen is never
+    // recomposed per frame, and (unlike infinite transitions) it keeps running when the phone's animations are switched off.
+    val clock = rememberClock()
     val found = remember { Animatable(0f) }
     val enter = remember { Animatable(0f) }          // the whole screen glides in (no hard jump from the camera)
     val picIn = remember { Animatable(0f) }          // the picture fades in as soon as it is decoded
@@ -274,45 +274,43 @@ private fun CropBody(vm: AppVM, page: Page) {
                         alpha = picIn.value,
                     )
                 }
+                val clk = clock.value
+                val ants = (clk * 52f) % 36f
                 val searching = sure == null
                 val teal = Color(0xFF5EEAD4)
                 if (searching && bmp != null) {
                     val iw = page.w * scale; val ih = page.h * scale
+                    val ph = (clk / 2.8f) % 1f                                   // one full trip (down, then back up) every 2.8 s
+                    val scan = 0.5f - 0.5f * cos(ph * 2f * PI.toFloat())         // 0 -> 1 -> 0, easing softly at both ends
+                    val down = ph < 0.5f
                     clipRect(left = ox, top = oy, right = ox + iw, bottom = oy + ih) {
-                        // light dimming so the moving light stands out
-                        drawRect(Color(0x40000000), Offset(ox, oy), Size(iw, ih))
-                        // the scan line slides top -> bottom -> top, easing softly at both ends like a real scanner head
-                        val sw = sweepT
-                        val down = sw < 0.5f
-                        val tri = if (down) sw * 2f else 2f - sw * 2f
-                        val scan = tri * tri * (3f - 2f * tri)
+                        drawRect(Color(0x33000000), Offset(ox, oy), Size(iw, ih))           // light dimming so the beam stands out
                         val y = oy + ih * scan
-                        val trail = ih * 0.28f
-                        // a trail of light BEHIND the line (the side it just came from), with a fine grid in it
+                        val trail = ih * 0.30f
                         val y0 = if (down) y - trail else y
                         val y1 = if (down) y else y + trail
-                        val colors = if (down) listOf(Color.Transparent, Color(0x665EEAD4)) else listOf(Color(0x665EEAD4), Color.Transparent)
-                        drawRect(Brush.verticalGradient(colors, startY = y0, endY = y1), Offset(ox, y0), Size(iw, trail))
-                        var gy = oy
-                        while (gy < oy + ih) {
-                            if (gy in y0..y1) {
-                                val k = if (down) (gy - y0) / trail else (y1 - gy) / trail
-                                drawLine(teal.copy(alpha = 0.45f * k), Offset(ox, gy), Offset(ox + iw, gy), strokeWidth = 1.5f)
-                            }
-                            gy += gridStep
-                        }
-                        // the scan line itself: soft glow + bright core
-                        drawLine(teal.copy(alpha = 0.40f), Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 4f)
-                        drawLine(Color.White, Offset(ox, y), Offset(ox + iw, y), strokeWidth = stroke * 1.1f)
+                        // soft light left behind the beam (on the side it just came from)
+                        val glow = Color(0x445EEAD4)
+                        val cols = if (down) listOf(Color.Transparent, glow) else listOf(glow, Color.Transparent)
+                        drawRect(Brush.verticalGradient(cols, startY = y0, endY = y1), Offset(ox, y0), Size(iw, trail))
+                        // the beam: wide halo, bright band, white core; every layer fades out toward the left and right edge
+                        fun layer(h: Float, c: Color) = drawRect(
+                            Brush.horizontalGradient(0f to Color.Transparent, 0.10f to c, 0.90f to c, 1f to Color.Transparent, startX = ox, endX = ox + iw),
+                            Offset(ox, y - h / 2f), Size(iw, h),
+                        )
+                        layer(stroke * 10f, teal.copy(alpha = 0.16f))
+                        layer(stroke * 4.5f, teal.copy(alpha = 0.40f))
+                        layer(stroke * 1.4f, Color.White)
                     }
-                    // 6. corner brackets that move in and out
+                    // four corner brackets that gently breathe
+                    val breathe = 0.65f + 0.35f * sin(clk * 3.7f)
                     val gap: Float = min(iw, ih) * 0.05f * breathe
                     val bx0: Float = ox + gap
                     val by0: Float = oy + gap
                     val bx1: Float = ox + iw - gap
                     val by1: Float = oy + ih - gap
                     val bl = min(iw, ih) * 0.11f
-                    val bc = Color.White
+                    val bc = Color.White.copy(alpha = 0.92f)
                     val bs = stroke * 2.4f
                     val cs4 = listOf(
                         Offset(bx0, by0) to (1f to 1f), Offset(bx1, by0) to (-1f to 1f),

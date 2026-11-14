@@ -35,6 +35,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -95,6 +99,22 @@ fun BusyOverlay(text: String?) {
     }
 }
 
+/**
+ * Seconds since the screen appeared, advanced on every screen frame.
+ * Unlike rememberInfiniteTransition / animateFloat, this does NOT obey the phone's "animator duration scale"
+ * (Developer options, "Remove animations", Battery saver), so the scanning animations always move.
+ * Read it only inside draw blocks (clock.value) so a frame redraws the picture and never recomposes the screen.
+ */
+@Composable
+fun rememberClock(): State<Float> {
+    val t = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val start = withFrameNanos { it }
+        while (true) withFrameNanos { t.floatValue = (it - start) / 1_000_000_000f }
+    }
+    return t
+}
+
 /** A small page with a light line that sweeps over it: "the app is working on this page". */
 @Composable
 fun ScanningDoc(
@@ -102,9 +122,10 @@ fun ScanningDoc(
     color: Color = Color(0xFF14B8A6),
     paper: Color = Color.White,
 ) {
-    val inf = rememberInfiniteTransition(label = "doc")
-    val t by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Reverse), label = "t")
+    val clock = rememberClock()
     Canvas(modifier.clip(RoundedCornerShape(6.dp))) {
+        val ph = (clock.value / 1f) % 2f                       // 1 s down, 1 s back up
+        val t = if (ph < 1f) ph else 2f - ph
         val w = size.width; val h = size.height
         drawRoundRect(paper, Offset.Zero, Size(w, h), CornerRadius(h * 0.1f, h * 0.1f))
         for (i in 0..3) {

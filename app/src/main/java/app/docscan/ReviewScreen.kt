@@ -247,7 +247,7 @@ fun ReviewScreen(vm: AppVM) {
                                 Spacer(Modifier.width(8.dp))
                                 Text("${cur.eff}%", fontSize = 15.sp, color = cs.primary, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.weight(1f))
-                                if (pages.size > 1) TextButton(onClick = { vm.applyLookToAll(cur) }) { Text(s.applyAll, fontSize = 13.sp) }
+                                if (pages.size > 1) TextButton(onClick = { vm.applyLookToAll(cur) }) { Text(s.applyAll, fontSize = 13.sp, maxLines = 1) }
                             }
                             Slider(
                                 value = cur.eff.toFloat(), onValueChange = { vm.setLook(cur.id, clarity = it.roundToInt()) },
@@ -360,8 +360,7 @@ private fun EffectPage(pg: Page) {
             old = null
         }
     }
-    val inf = rememberInfiniteTransition(label = "work")
-    val sweep by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart), label = "sweep")
+    val clock = rememberClock()
     val busyA by animateFloatAsState(if (working) 1f else 0f, tween(250), label = "busy")
     val label = if (pg.prevKey.substringBefore(':') != pg.mode) s.applyingEffect else s.enhancing
 
@@ -388,6 +387,7 @@ private fun EffectPage(pg: Page) {
                 drawImage(cur, dstOffset = off, dstSize = dst)
             }
             if (busyA > 0.01f) {
+                val sweep = (clock.value / 1.3f) % 1f
                 drawRect(Color.Black.copy(alpha = 0.10f * busyA), Offset(ox, oy), Size(dw, dh))
                 val bw = dw * 0.38f
                 val cx = ox - bw + (dw + 2f * bw) * sweep
@@ -476,31 +476,49 @@ private fun NumberControls(vm: AppVM) {
                 Column(Modifier.weight(1f)) {
                     Text(s.numWhere, fontSize = 11.sp, color = cs.onSurfaceVariant)
                     Text(s.posName(vm.numPos), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = cs.primary)
-                    Text(s.numSizeLabel, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
-                    val idx = Paper.numSizes.indexOf(vm.numSize).let { if (it < 0) 1 else it }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StepBtn("−", idx > 0) { vm.chooseNumSize(Paper.numSizes[idx - 1]) }
+                }
+            }
+        }
+    }
+    AnimatedVisibility(visible = on, enter = fadeIn(tween(200)) + expandVertically(tween(250)), exit = fadeOut(tween(150)) + shrinkVertically(tween(200))) {
+        Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.numSizeLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Surface(shape = RoundedCornerShape(10.dp), color = cs.primaryContainer) {
                         Text(
-                            "${Paper.numSizes[idx]} pt", fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center, modifier = Modifier.width(68.dp),
+                            "${vm.numSize} pt", Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer,
                         )
-                        StepBtn("+", idx < Paper.numSizes.size - 1) { vm.chooseNumSize(Paper.numSizes[idx + 1]) }
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                NumberSizePicker(Paper.numSizes, vm.numSize) { vm.chooseNumSize(it) }
             }
         }
     }
 }
 
+/** Size chips: each number is drawn in its own (growing) size, so the choice can be seen, not just read. */
 @Composable
-private fun StepBtn(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun NumberSizePicker(sizes: List<Int>, selected: Int, onPick: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier.size(38.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onClick),
-        shape = CircleShape, color = if (enabled) cs.primaryContainer else cs.surface,
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(label, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = if (enabled) cs.onPrimaryContainer else cs.outline)
+        sizes.forEach { sz ->
+            val sel = sz == selected
+            val bg by androidx.compose.animation.animateColorAsState(if (sel) cs.primary else Color.Transparent, tween(180), label = "szBg")
+            Box(
+                Modifier.weight(1f).height(46.dp).clip(RoundedCornerShape(10.dp)).background(bg).clickable { onPick(sz) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "$sz", fontSize = (10f + sz * 0.42f).sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontWeight = FontWeight.Bold, color = if (sel) cs.onPrimary else cs.onSurfaceVariant,
+                )
+            }
         }
     }
 }
