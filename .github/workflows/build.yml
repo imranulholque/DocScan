@@ -41,19 +41,22 @@ jobs:
           gradle :app:assembleRelease --no-daemon --stacktrace -PnoCv=true
 
       - name: Name the APK
-        run: cp app/build/outputs/apk/release/app-release.apk DocScan.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk DocScanner.apk
+          # copies installed before the rename (called "DocScan") look for DocScan.apk: keep one identical file for them
+          cp DocScanner.apk DocScan.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DocScan-apk
-          path: DocScan.apk
+          name: DocScanner-apk
+          path: DocScanner.apk
 
       - name: Publish a release (download the APK from your phone)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git log -1 --pretty=%B > notes.txt          # what is new = the commit message; the app shows it in the update question
-          gh release create "build-${BUILD_NUMBER}" DocScan.apk \
-            --title "DocScan build ${BUILD_NUMBER}" \
+          gh release create "build-${BUILD_NUMBER}" DocScanner.apk DocScan.apk \
+            --title "DocScanner build ${BUILD_NUMBER}" \
             --notes-file notes.txt \
             --latest
