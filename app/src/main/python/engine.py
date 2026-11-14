@@ -250,14 +250,37 @@ def _full_look(im, mode, clarity):
 FULL_AT = 60.0       # slider value where a look is fully applied (the default); below it the look fades back to the original
 
 
-def apply(im, mode, clarity):
+def text_clarity(im, tc):
+    """The TEXT CLARITY slider for every look (0 = untouched ... 100 = strongest): one mix of the Image Fixer text options
+    (text sharpness, line / shape sharpness, faint strokes, text darkness, clean specks). It runs on the picture BEFORE the look,
+    so faint or soft writing is made bolder and crisper first and the look then turns it into clean black text on white paper
+    (after the look the ink is already pure black, so a clarity step there would change nothing)."""
+    t = max(0.0, min(1.0, float(tc) / 100.0))
+    if t <= 0.0:
+        return im
+    import numpy as np
+    look = core.new_look(sharp=int(85 * t), objs=int(40 * t), detail=int(55 * t), dark=int(75 * t), clear=int(35 * t))
+    return Image.fromarray(core.clarity(np.asarray(im.convert("RGB")), look))
+
+
+def _turn(im, rot):
+    """Clockwise quarter turns (the page was turned on the review screen: nothing is re-made there, it is turned here when saving)."""
+    t = int(rot) % 4
+    if t:
+        im = im.transpose({1: Image.Transpose.ROTATE_270, 2: Image.Transpose.ROTATE_180,
+                           3: Image.Transpose.ROTATE_90}[t])
+    return im
+
+
+def apply(im, mode, clarity, tc=0):
     """PIL image -> PIL image. mode: orig | color | vivid | gray | bw.
     Like Lightroom's effect amount: 0 = the original picture, FULL_AT = the look as designed, above = stronger.
-    "orig" has no look; its slider is the text clarity (0 = untouched)."""
+    "orig" has no look; its slider is the text clarity (0 = untouched). For the other looks `clarity` is the effect amount
+    and `tc` is the text clarity (0 = off)."""
     if mode == "orig":
         return _orig_look(im, clarity)
     c = float(clarity)
-    base = im.convert("RGB")
+    base = text_clarity(im.convert("RGB"), tc)
     if c <= 0.0:
         return base
     out = _full_look(base, mode, c)
@@ -301,21 +324,21 @@ def stamp_number(im, number, pos, size, font_path):
     return im
 
 
-def render(path, dst, mode, clarity, max_side=0):
+def render(path, dst, mode, clarity, max_side=0, tc=0):
     """Filtered copy of a cropped page (max_side > 0 = small, fast preview). Returns 'w,h'."""
     im = _open(path)
     max_side = int(max_side)
     if max_side > 0 and max(im.size) > max_side:
         s = max_side / float(max(im.size))
         im = im.resize((max(1, round(im.width * s)), max(1, round(im.height * s))), Image.Resampling.LANCZOS)
-    out = apply(im, mode, float(clarity))
+    out = apply(im, mode, float(clarity), float(tc))
     _save_jpg(out, dst, 90 if max_side > 0 else 95)
     return "%d,%d" % out.size
 
 
-def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path=""):
+def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path="", tc=0, rot=0):
     """Final picture: JPG or PNG, full resolution, with the chosen look (and the page number, if chosen)."""
-    out = apply(_open(path), mode, float(clarity))
+    out = apply(_turn(_open(path), rot), mode, float(clarity), float(tc))
     out = stamp_number(out, number, pos, float(num_size), font_path)
     if fmt == "png":
         out.save(dst, "PNG", optimize=False)
@@ -325,7 +348,7 @@ def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12
 
 
 def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
-    """pages = 'path|mode|clarity' lines joined by newline. One PDF, one page per picture, in order.
+    """pages = 'path|mode|clarity|textclarity|turns' lines joined by newline. One PDF, one page per picture, in order.
     page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Bold,
     the standard PDF font = Times New Roman Bold look, drawn as real text)."""
     import io
@@ -333,8 +356,8 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
     for line in pages.split("\n"):
         if not line.strip():
             continue
-        p, m, c = line.rsplit("|", 2)
-        rows.append((p, m, c))
+        p, m, c, t, r = line.rsplit("|", 4)                     # path | mode | clarity | text clarity | turns
+        rows.append((p, m, c, t, r))
     n = len(rows)
     if n == 0:
         raise ValueError("Nothing to save")
@@ -349,8 +372,8 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
             f.write(b"%d 0 obj\n" % num + body + b"\nendobj\n")
 
         font_obj = 3 + 3 * n
-        for i, (p, m, c) in enumerate(rows):
-            im = apply(_open(p), m, float(c)).convert("RGB")
+        for i, (p, m, c, t, r) in enumerate(rows):
+            im = apply(_turn(_open(p), int(r)), m, float(c), float(t)).convert("RGB")
             w, h = im.size
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
