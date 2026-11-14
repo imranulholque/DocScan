@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -101,7 +102,11 @@ fun CameraScreen(vm: AppVM) {
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(Unit) { if (!granted) permLauncher.launch(Manifest.permission.CAMERA) }
 
-    val leave = { vm.cancelRetake(); vm.screen = if (vm.pages.any { it.cropped != null }) Screen.Review else Screen.Home }
+    val leave = {
+        vm.cancelRetake()
+        if (vm.camForSig) { vm.camForSig = false; vm.screen = if (vm.pages.isEmpty()) Screen.Home else Screen.Review }
+        else vm.screen = if (vm.pages.any { it.cropped != null }) Screen.Review else Screen.Home
+    }
     BackHandler { leave() }
 
     if (!granted) {
@@ -175,6 +180,8 @@ private class LiveGuide {
     var kind by mutableIntStateOf(1)                       // 0 = move the phone, 1 = almost, 2 = good
     var last = 0L
     private var stable = 0
+    private var lastLight = 0
+    private var lightCount = 0
     private var miss = 0
     var prev: List<Offset>? = null
     val busy = AtomicBoolean(false)
@@ -182,7 +189,7 @@ private class LiveGuide {
 
     private fun say(t: String, sb: String, k: Int) { title = t; sub = sb; kind = k }
 
-    fun update(q: List<Offset>?, w: Int, h: Int, s: Str) {
+    fun update(q: List<Offset>?, w: Int, h: Int, s: Str, rgb: ByteArray? = null) {
         aspect = w.toFloat() / h
         if (q == null) {
             stable = 0; good = false
@@ -199,10 +206,43 @@ private class LiveGuide {
         }
         prev = sm; quad = sm
         stable = if (move < 0.014f) stable + 1 else 0
-        judge(sm, w, h, s)
+        judge(sm, w, h, s, rgb)
     }
 
-    private fun judge(q: List<Offset>, w: Int, h: Int, s: Str) {
+    /** 0 = fine, 1 = too dark, 2 = shadow across the paper, 3 = glare. Looks at the paper only (inside the outline's box), a few hundred samples. */
+    private fun light(q: List<Offset>, w: Int, h: Int, rgb: ByteArray): Int {
+        val x0 = (q.minOf { it.x } * w).toInt().coerceIn(0, w - 1); val x1 = (q.maxOf { it.x } * w).toInt().coerceIn(x0 + 1, w)
+        val y0 = (q.minOf { it.y } * h).toInt().coerceIn(0, h - 1); val y1 = (q.maxOf { it.y } * h).toInt().coerceIn(y0 + 1, h)
+        val gx = 4; val gy = 5
+        val cell = FloatArray(gx * gy)
+        var glare = 0; var n = 0
+        val tmp = IntArray(36)
+        for (cy in 0 until gy) for (cx in 0 until gx) {
+            var k = 0
+            for (j in 0 until 6) for (i in 0 until 6) {
+                val px = (x0 + ((cx + (i + 0.5f) / 6f) / gx * (x1 - x0))).toInt().coerceIn(0, w - 1)
+                val py = (y0 + ((cy + (j + 0.5f) / 6f) / gy * (y1 - y0))).toInt().coerceIn(0, h - 1)
+                val o = (py * w + px) * 3
+                val r = rgb[o].toInt() and 255; val g = rgb[o + 1].toInt() and 255; val b = rgb[o + 2].toInt() and 255
+                val l = (r * 77 + g * 150 + b * 29) shr 8
+                tmp[k++] = l
+                if (l >= 251) glare++
+                n++
+            }
+            tmp.sort()
+            cell[cy * gx + cx] = tmp[27].toFloat()              // the paper brightness of this part (text is darker, so not the average)
+        }
+        val mx = cell.max(); val mn = cell.min()
+        val med = cell.sorted()[cell.size / 2]
+        return when {
+            med < 95f -> 1
+            mx > 60f && mn / mx < 0.62f -> 2
+            glare.toFloat() / n > 0.07f -> 3
+            else -> 0
+        }
+    }
+
+    private fun judge(q: List<Offset>, w: Int, h: Int, s: Str, rgb: ByteArray?) {
         good = false
         val area = polyArea(q)
         val cx = q.sumOf { it.x.toDouble() }.toFloat() / 4f
@@ -212,6 +252,11 @@ private class LiveGuide {
         fun d(a: Offset, b: Offset) = hypot((a.x - b.x) * w, (a.y - b.y) * h)
         val rt = max(d(q[0], q[1]), d(q[3], q[2])) / max(1f, min(d(q[0], q[1]), d(q[3], q[2])))
         val rl = max(d(q[0], q[3]), d(q[1], q[2])) / max(1f, min(d(q[0], q[3]), d(q[1], q[2])))
+        // light is judged on 3 frames in a row, so one flicker does not change the message
+        val li = if (rgb != null) light(q, w, h, rgb) else 0
+        lightCount = if (li != 0 && li == lastLight) lightCount + 1 else if (li != 0) 1 else 0
+        lastLight = li
+        val lightIssue = if (lightCount >= 3) li else 0
         when {
             clip -> say(s.liveBack, s.liveBackSub, 0)
             area < 0.3f -> say(s.liveCloser, s.liveCloserSub, 0)
@@ -220,6 +265,9 @@ private class LiveGuide {
                 say(s.liveMove(dir), s.liveCenterSub, 0)
             }
             max(rt, rl) > 1.28f -> say(s.liveFlat, s.liveFlatSub, 0)
+            lightIssue == 1 -> say(s.liveDark, s.liveDarkSub, 0)
+            lightIssue == 2 -> say(s.liveShadow, s.liveShadowSub, 0)
+            lightIssue == 3 -> say(s.liveGlare, s.liveGlareSub, 0)
             stable >= 4 -> { good = true; say(s.liveGood, s.liveGoodSub, 2) }
             else -> say(s.liveAlmost, s.liveAlmostSub, 1)
         }
@@ -305,7 +353,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                         scope.launch {
                             try {
                                 val q = Engine.live(f.rgb, f.w, f.h)
-                                if (guide.on) guide.update(q, f.w, f.h, strNow)
+                                if (guide.on) guide.update(q, f.w, f.h, strNow, f.rgb)
                             } catch (_: Exception) {
                             } finally { guide.busy.set(false) }
                         }
@@ -323,7 +371,19 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) scope.launch { vm.importUris(uris) }
+        if (uris.isNotEmpty()) scope.launch { if (vm.camForSig) vm.importSignature(uris.first()) else vm.importUris(uris) }
+    }
+    // tips: shown by themselves the first time, and whenever the Tips button is pressed
+    var tips by remember { mutableStateOf(if (vm.camForSig) !vm.sigTipsSeen else !vm.camTipsSeen) }
+    // when the paper is steady and good: focus on the middle of the frame, so the text is sharp when the button is pressed
+    LaunchedEffect(guide.good) {
+        if (guide.good) {
+            val c = camera ?: return@LaunchedEffect
+            try {
+                val p = previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
+                c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(p).build())
+            } catch (_: Exception) { }
+        }
     }
 
     fun shoot() {
@@ -344,6 +404,11 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                     // no "processing" screen here: the picture is prepared natively and the crop screen opens right away
                     scope.launch {
                         try {
+                            if (vm.camForSig) {
+                                vm.startSignature(file)
+                                guide.on = true
+                                return@launch
+                            }
                             val id = vm.addPhoto(file)
                             if (id != null) {
                                 vm.photoTaken(id, hint)
@@ -440,14 +505,17 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
             }
         }
         if (flash.value > 0.01f) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.16f * flash.value)))   // only a faint glow
+        if (tips) CamTips(vm.camForSig) { tips = false; if (vm.camForSig) vm.markSigTipsSeen() else vm.markCamTipsSeen() }
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassButton(onClick = leave) { Icon(Icons.Filled.Close, s.back, tint = Color.White) }
                 Spacer(Modifier.weight(1f))
+                GlassButton(onClick = { tips = true }) { Text("?", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                Spacer(Modifier.width(10.dp))
                 GlassButton(onClick = { torch = !torch }, active = torch) { FlashIcon(on = torch) }
             }
             // what to do now (too close, move left, hold still ...): changes softly, colour follows how good the shot is
-            val msgTitle = guide.title ?: s.camHint
+            val msgTitle = guide.title ?: (if (vm.camForSig) s.sigCamHint else s.camHint)
             val msgSub = if (guide.title == null) "" else guide.sub
             val msgBg = animateColorAlways(
                 when (if (guide.title == null) 1 else guide.kind) { 2 -> Color(0xDD14532D); 0 -> Color(0xDD78350F); else -> Color(0x99000000) }, 300,
@@ -492,6 +560,34 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** The best way to take the photo, in a few short lines (for a page, or for a signature). */
+@Composable
+private fun CamTips(forSig: Boolean, onClose: () -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    val lines = if (forSig) listOf(s.sigTip1, s.sigTip2, s.sigTip3, s.sigTip4, s.sigTip5)
+    else listOf(s.camTip1, s.camTip2, s.camTip3, s.camTip4, s.camTip5, s.camTip6)
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Surface(shape = RoundedCornerShape(28.dp), color = cs.surface) {
+            Column(Modifier.padding(20.dp)) {
+                Text(if (forSig) s.sigTipsTitle else s.camTipsTitle, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    lines.forEachIndexed { i, t ->
+                        Row(verticalAlignment = Alignment.Top) {
+                            Box(Modifier.size(22.dp).clip(CircleShape).background(cs.primaryContainer), contentAlignment = Alignment.Center) {
+                                Text("${i + 1}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(t, fontSize = 14.sp, lineHeight = 19.sp)
+                        }
+                    }
+                }
+                Button(onClick = onClose, modifier = Modifier.fillMaxWidth().padding(top = 16.dp).height(48.dp)) { Text(s.gotIt, fontWeight = FontWeight.Bold) }
             }
         }
     }

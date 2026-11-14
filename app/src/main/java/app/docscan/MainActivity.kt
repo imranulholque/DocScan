@@ -52,6 +52,7 @@ fun AppRoot(vm: AppVM = viewModel()) {
             Screen.Crop -> CropScreen(vm)
             Screen.Review -> ReviewScreen(vm)
             Screen.Settings -> SettingsScreen(vm)
+            Screen.Sign -> SignScreen(vm)
         }
         BusyOverlay(vm.busy)
         UpdateDialogs(vm)

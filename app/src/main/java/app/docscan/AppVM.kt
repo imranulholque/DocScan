@@ -28,7 +28,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-enum class Screen { Home, Camera, Crop, Review, Settings }
+enum class Screen { Home, Camera, Crop, Review, Settings, Sign }
 
 data class Page(
     val id: String,
@@ -44,6 +44,8 @@ data class Page(
     val prevKey: String = "",
     val prevSide: Int = 0,            // long side of that preview (a quick small one first, the big one when the person pauses)
     val thumbs: String? = null,       // prefix of the small look previews
+    val cw: Int = 0, val ch: Int = 0, // size of the straightened page (0 = not known yet)
+    val sigs: List<SigPlace> = emptyList(),   // signatures placed on this page
 ) {
     /** The slider value that belongs to the chosen look (orig: the text clarity, others: the effect amount). */
     val eff: Int get() = if (mode == "orig") oClarity else clarity
@@ -54,6 +56,15 @@ data class Page(
 }
 
 class Saved(val place: String, val files: List<File>)
+
+/** A signature of the collection: a transparent PNG kept in the app's own folder (stays after the app is closed). */
+class Sig(val id: String, val path: String, val w: Int, val h: Int)
+
+/** A signature placed on a page. cx, cy = its centre and w = its width, all as fractions of the page as it is shown (0..1); rot = clockwise degrees. */
+data class SigPlace(val id: String, val sigId: String, val cx: Float, val cy: Float, val w: Float, val rot: Float, val alpha: Float = 1f)
+
+/** The photo a new signature is made from (already upright and not too big). */
+class SigSrc(val path: String, val w: Int, val h: Int)
 
 class AppVM(app: Application) : AndroidViewModel(app) {
     private val ctx: Context get() = getApplication<Application>()
@@ -84,7 +95,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun chooseNumSize(v: Int) { checkpoint("numsize"); numSize = v; prefs.edit().putInt("numSize", v).apply() }
 
     // ------------------------------------------------------------ undo (looks, page number, page size) and reset all
-    private class Snap(val looks: Map<String, Triple<String, Int, Int>>, val numPos: String, val numSize: Int, val pdfSize: String)
+    private class Snap(val looks: Map<String, Triple<String, Int, Int>>, val sigs: Map<String, List<SigPlace>>, val numPos: String, val numSize: Int, val pdfSize: String)
     private val undoStack = ArrayList<Snap>()
     private var lastKey = ""
     private var lastAt = 0L
@@ -96,14 +107,18 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val now = System.currentTimeMillis()
         if (key != null && key == lastKey && now - lastAt < 700) { lastAt = now; return }
         lastKey = key ?: ""; lastAt = now
-        undoStack.add(Snap(pages.associate { it.id to Triple(it.mode, it.clarity, it.oClarity) }, numPos, numSize, pdfSize))
+        undoStack.add(Snap(pages.associate { it.id to Triple(it.mode, it.clarity, it.oClarity) }, pages.associate { it.id to it.sigs }, numPos, numSize, pdfSize))
         if (undoStack.size > 40) undoStack.removeAt(0)
         undoCount = undoStack.size
     }
 
     fun undo() {
         val snap = undoStack.removeLastOrNull() ?: return
-        for (p in pages.toList()) snap.looks[p.id]?.let { (m, c, o) -> upd(p.id) { it.copy(mode = m, clarity = c, oClarity = o) } }
+        for (p in pages.toList()) {
+            snap.looks[p.id]?.let { (m, c, o) -> upd(p.id) { it.copy(mode = m, clarity = c, oClarity = o) } }
+            snap.sigs[p.id]?.let { sg -> upd(p.id) { it.copy(sigs = sg) } }
+        }
+        selSig = null
         numPos = snap.numPos; numSize = snap.numSize; pdfSize = snap.pdfSize
         prefs.edit().putString("numPos", numPos).putInt("numSize", numSize).putString("pdfSize", pdfSize).apply()
         lastKey = ""; undoCount = undoStack.size
@@ -118,6 +133,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     var screen by mutableStateOf(Screen.Home)
+    var reviewTab by mutableIntStateOf(0)           // 0 effect, 1 signature, 2 page size, 3 page number (kept while another screen is open)
     val pages = mutableStateListOf<Page>()
     var current by mutableIntStateOf(0)
     var cropQueue by mutableStateOf<List<String>>(emptyList())
@@ -303,9 +319,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     suspend fun applyCrop(id: String, quad: List<Offset>) {
         val p = page(id) ?: return
         val dst = file(id, "crop")
-        Engine.crop(p.work, quad, dst)
+        val (cw, ch) = Engine.crop(p.work, quad, dst)
         del(p.cropped); del(p.prev)
-        upd(id) { it.copy(cropped = dst, quad = quad, rot = 0, prev = null, prevKey = "", prevSide = 0, thumbs = null) }
+        upd(id) { it.copy(cropped = dst, quad = quad, rot = 0, prev = null, prevKey = "", prevSide = 0, thumbs = null, cw = cw, ch = ch) }
         replace?.let { (newId, oldId) -> if (newId == id) swapIn(newId, oldId) }
     }
 
@@ -315,7 +331,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val ni = pages.indexOfFirst { it.id == newId }
         val oldPage = page(oldId)
         if (ni < 0 || oldPage == null) return
-        val np = pages.removeAt(ni).copy(mode = oldPage.mode, clarity = oldPage.clarity, oClarity = oldPage.oClarity)
+        val np = pages.removeAt(ni).copy(mode = oldPage.mode, clarity = oldPage.clarity, oClarity = oldPage.oClarity, sigs = oldPage.sigs)
         val oi = pages.indexOfFirst { it.id == oldId }
         if (oi < 0) { pages.add(ni.coerceAtMost(pages.size), np); return }
         pages[oi] = np
@@ -395,7 +411,16 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     /** Instant: only the number of quarter turns changes. The screen turns the picture it already has; the files are turned when saving. */
     fun rotate(id: String) {
-        upd(id) { it.copy(rot = (it.rot + 1) % 4) }
+        // signatures on the page turn with it (their place on the page, their direction and their width relative to the new page width)
+        upd(id) { p ->
+            val dw0 = if (p.rot % 2 == 0) p.cw else p.ch
+            val dh0 = if (p.rot % 2 == 0) p.ch else p.cw
+            val k = if (dw0 > 0 && dh0 > 0) dw0.toFloat() / dh0 else 1f
+            p.copy(
+                rot = (p.rot + 1) % 4,
+                sigs = p.sigs.map { it.copy(cx = 1f - it.cy, cy = it.cx, w = (it.w * k).coerceIn(0.03f, 1.5f), rot = (it.rot + 90f) % 360f) },
+            )
+        }
     }
 
     fun delete(index: Int) {
@@ -423,11 +448,141 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearAll() {
-        pages.clear(); cropQueue = emptyList(); current = 0; saved = null
+        pages.clear(); cropQueue = emptyList(); current = 0; saved = null; selSig = null; reviewTab = 0
         undoStack.clear(); undoCount = 0
         sessionDir.deleteRecursively(); sessionDir.mkdirs()
         screen = Screen.Home
     }
+
+    // ------------------------------------------------------------ signatures
+    /** The collection (newest first). Each one is a transparent PNG in the app's own folder. */
+    val signatures = mutableStateListOf<Sig>()
+    private val sigDir = File(ctx.filesDir, "signatures").apply { mkdirs() }
+    /** The photo a new signature is being made from (the Sign screen is open while this is set). */
+    var sigSrc by mutableStateOf<SigSrc?>(null)
+        private set
+    /** The camera was opened to take a signature photo (not a page). */
+    var camForSig by mutableStateOf(false)
+    /** The signature on the page that is selected (id of its SigPlace). */
+    var selSig by mutableStateOf<String?>(null)
+
+    init {
+        val files = sigDir.listFiles { f -> f.extension == "png" }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        for (f in files) {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.absolutePath, o)
+            if (o.outWidth > 0 && o.outHeight > 0) signatures.add(Sig(f.nameWithoutExtension, f.absolutePath, o.outWidth, o.outHeight))
+        }
+    }
+
+    /** A photo (from the camera or a copy of a gallery picture) is the start of a new signature: the Sign screen opens. */
+    suspend fun startSignature(src: File) {
+        val work = File(sessionDir, "sigsrc-${System.nanoTime()}.jpg")
+        try {
+            val (w, h) = try {
+                prepareNative(src, work, 2200)
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                Engine.prepare(src.absolutePath, work.absolutePath)
+            }
+            sigSrc?.let { File(it.path).delete() }
+            sigSrc = SigSrc(work.absolutePath, w, h)
+            camForSig = false
+            screen = Screen.Sign
+        } catch (e: Exception) {
+            toast(str.errPrefix + (e.message ?: ""))
+        } finally {
+            src.delete()
+        }
+    }
+
+    suspend fun importSignature(uri: Uri) {
+        val tmp = File(ctx.cacheDir, "sig_${System.nanoTime()}.jpg")
+        try {
+            withContext(Dispatchers.IO) {
+                ctx.contentResolver.openInputStream(uri)!!.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+            }
+        } catch (e: Exception) {
+            toast(str.errPrefix + (e.message ?: "")); return
+        }
+        startSignature(tmp)
+    }
+
+    /** Leaves the Sign screen (the signature was saved, or the person went back). */
+    fun closeSign(tab: Int = 1) {
+        sigSrc?.let { File(it.path).delete() }
+        sigSrc = null
+        reviewTab = tab
+        screen = if (pages.isEmpty()) Screen.Home else Screen.Review
+    }
+
+    /** A finished signature PNG (made in the cache) joins the collection. */
+    fun addSignature(png: File, w: Int, h: Int): Sig {
+        val id = newId()
+        val dst = File(sigDir, "$id.png")
+        png.copyTo(dst, overwrite = true)
+        png.delete()
+        val sg = Sig(id, dst.absolutePath, w, h)
+        signatures.add(0, sg)
+        return sg
+    }
+
+    fun deleteSignature(id: String) {
+        val sg = signatures.firstOrNull { it.id == id } ?: return
+        signatures.remove(sg)
+        File(sg.path).delete()
+        for (p in pages.toList()) if (p.sigs.any { it.sigId == id }) upd(p.id) { it.copy(sigs = it.sigs.filter { s -> s.sigId != id }) }
+        selSig = null
+    }
+
+    /** The signature goes to the middle of the page (the person drags it where it belongs). */
+    fun placeSig(pageId: String, sigId: String) {
+        val sg = signatures.firstOrNull { it.id == sigId } ?: return
+        val p = page(pageId) ?: return
+        checkpoint(null)
+        val pageAspect = if (p.cw > 0 && p.ch > 0) (if (p.rot % 2 == 0) p.cw.toFloat() / p.ch else p.ch.toFloat() / p.cw) else 0.72f
+        var w = 0.36f
+        val hFrac = w / pageAspect * sg.h / sg.w                     // its height as a fraction of the page height
+        if (hFrac > 0.30f) w *= 0.30f / hFrac
+        val pl = SigPlace(newId(), sigId, 0.5f, 0.5f, w.coerceIn(0.06f, 0.9f), 0f)
+        upd(pageId) { it.copy(sigs = it.sigs + pl) }
+        selSig = pl.id
+    }
+
+    /** Moves / resizes / turns one signature. A drag is ONE undo step. */
+    fun updateSig(pageId: String, id: String, f: (SigPlace) -> SigPlace) {
+        checkpoint("sig:$id")
+        upd(pageId) { p -> p.copy(sigs = p.sigs.map { if (it.id == id) f(it) else it }) }
+    }
+
+    fun removeSig(pageId: String, id: String) {
+        checkpoint(null)
+        upd(pageId) { p -> p.copy(sigs = p.sigs.filter { it.id != id }) }
+        if (selSig == id) selSig = null
+    }
+
+    /** The same signature in the same place on every other page too (pressing it again does not add it twice). */
+    fun copySigToAll(pageId: String, id: String) {
+        val src = page(pageId)?.sigs?.firstOrNull { it.id == id } ?: return
+        checkpoint(null)
+        for (p in pages.toList()) {
+            if (p.id == pageId) continue
+            upd(p.id) { q -> q.copy(sigs = q.sigs.filter { it.sigId != src.sigId } + src.copy(id = newId())) }
+        }
+    }
+
+    private fun sigString(p: Page): String = p.sigs.mapNotNull { pl ->
+        val sg = signatures.firstOrNull { it.id == pl.sigId } ?: return@mapNotNull null
+        "${sg.path}~${pl.cx}~${pl.cy}~${pl.w}~${pl.rot}~${pl.alpha}"
+    }.joinToString(";")
+
+    // ------------------------------------------------------------ camera tips (shown once)
+    var camTipsSeen by mutableStateOf(prefs.getBoolean("camTipsSeen", false))
+        private set
+    fun markCamTipsSeen() { camTipsSeen = true; prefs.edit().putBoolean("camTipsSeen", true).apply() }
+    var sigTipsSeen by mutableStateOf(prefs.getBoolean("sigTipsSeen", false))
+        private set
+    fun markSigTipsSeen() { sigTipsSeen = true; prefs.edit().putBoolean("sigTipsSeen", true).apply() }
 
     // ------------------------------------------------------------ export (save / share)
     /** Makes the final files (full quality) in the cache: one PDF with all pages, or one picture per page. */
@@ -438,7 +593,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         if (format == "pdf") {
             busy = str.processing
             val f = File(out, "DocScanner_$ts.pdf")
-            Engine.makePdf(list.map { Engine.PdfItem(it.cropped!!, it.mode, it.eff, if (it.mode == "orig") 0 else it.oClarity, it.rot) }, f.absolutePath, size, numPos, numSize)
+            Engine.makePdf(list.map { Engine.PdfItem(it.cropped!!, it.mode, it.eff, if (it.mode == "orig") 0 else it.oClarity, it.rot, sigString(it)) }, f.absolutePath, size, numPos, numSize)
             return listOf(f)
         }
         val ext = if (format == "png") "png" else "jpg"
@@ -446,7 +601,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         list.forEachIndexed { i, p ->
             busy = str.exporting(i + 1, list.size)
             val f = File(out, if (list.size == 1) "DocScanner_$ts.$ext" else "DocScanner_${ts}_${i + 1}.$ext")
-            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx), if (p.mode == "orig") 0 else p.oClarity, p.rot)
+            Engine.exportImage(p.cropped!!, f.absolutePath, format, p.mode, p.eff, i + 1, numPos, numSize, Fonts.path(ctx), if (p.mode == "orig") 0 else p.oClarity, p.rot, sigString(p))
             files.add(f)
         }
         return files

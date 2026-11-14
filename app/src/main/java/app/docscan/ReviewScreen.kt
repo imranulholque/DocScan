@@ -1,6 +1,17 @@
 package app.docscan
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -162,10 +173,19 @@ fun ReviewScreen(vm: AppVM) {
         if (c.thumbs == null) vm.ensureThumbs(c.id)
     }
 
-    var tab by remember { mutableIntStateOf(0) }            // 0 = effect, 1 = page size, 2 = page number
+    val tab = vm.reviewTab                                   // 0 = effect, 1 = signature, 2 = page size, 3 = page number
+    LaunchedEffect(pager.currentPage, tab) { vm.selSig = null }
+    var collapsed by remember { mutableStateOf(false) }      // the control panel is folded down: the page gets all the room
     var exportMode by remember { mutableStateOf<String?>(null) }
     var askDelete by remember { mutableStateOf(false) }
     var askReset by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var addSig by remember { mutableStateOf(false) }
+    var askSigDelete by remember { mutableStateOf<String?>(null) }
+    val sigBmps by rememberSigBitmaps(vm)
+    val pickSig = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch { vm.importSignature(uri) }
+    }
 
     fun go(mode: String) {
         scope.launch {
@@ -187,19 +207,32 @@ fun ReviewScreen(vm: AppVM) {
     }
 
     Column(Modifier.fillMaxSize().background(cs.background).systemBarsPadding()) {
-        // top bar
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        // top bar: back, page, undo, more (reset), save, share
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp).height(52.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.screen = Screen.Home }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, s.back) }
-            Text(s.pageOf(pager.currentPage + 1, pages.size), fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TextButton(onClick = { vm.undo() }, enabled = vm.undoCount > 0) { Text("↶ " + s.undo, fontWeight = FontWeight.Bold) }
-            TextButton(onClick = { askReset = true }) { Text(s.resetAll, fontWeight = FontWeight.Bold) }
+            Text(s.pageOf(pager.currentPage + 1, pages.size), fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            IconButton(onClick = { vm.undo() }, enabled = vm.undoCount > 0) {
+                Text("↶", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = if (vm.undoCount > 0) cs.onSurface else cs.outline)
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, s.resetAll) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text(s.resetAll) }, onClick = { menuOpen = false; askReset = true })
+                    if (pages.size > 1 && cur != null) DropdownMenuItem(text = { Text(s.applyAll) }, onClick = { menuOpen = false; vm.applyLookToAll(cur) })
+                }
+            }
+            Button(
+                onClick = { exportMode = "save" }, modifier = Modifier.height(38.dp),
+                contentPadding = PaddingValues(horizontal = 18.dp),
+            ) { Text(s.save, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+            IconButton(onClick = { exportMode = "share" }) { Icon(Icons.Filled.Share, s.share, tint = cs.primary) }
         }
 
         // page thumbnails: tap = open the page, press and hold + drag left / right = change the order
         ThumbStrip(vm, pager.currentPage) { i -> scope.launch { atFullSpeed { pager.animateScrollToPage(i) } } }
 
         // what the saved page will look like (on the page size and page number tabs)
-        if (tab != 0) {
+        if (tab >= 2) {
             val paperNow = if (vm.fmt == "pdf") vm.pdfSize else "fit"
             Text(
                 s.previewCaption + " · " + Paper.label(paperNow, s) + (Paper.mm(paperNow)?.let { " ($it)" } ?: ""),
@@ -212,90 +245,59 @@ fun ReviewScreen(vm: AppVM) {
         var zoomed by remember { mutableStateOf(false) }      // a page is zoomed in: one finger moves the picture, not the pager
         HorizontalPager(
             pager, Modifier.weight(1f).fillMaxWidth(), pageSpacing = 12.dp,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            userScrollEnabled = !zoomed,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            userScrollEnabled = !zoomed && tab != 1,
         ) { i ->
             pages.getOrNull(i)?.let { pg ->
-                if (tab == 0) EffectPage(pg) { zoomed = it }
-                else {
-                    val bmp by rememberPageBitmap(pg)
-                    PaperPreview(
-                        bmp, if (vm.fmt == "pdf") vm.pdfSize else "fit", vm.numPos, vm.numSize, i + 1,
-                        Modifier.fillMaxSize(),
-                    )
+                when (tab) {
+                    0 -> EffectPage(pg, sigBmps) { zoomed = it }
+                    1 -> {
+                        val bmp by rememberPageBitmap(pg)
+                        SignPage(vm, pg, bmp, sigBmps)
+                    }
+                    else -> {
+                        val bmp by rememberPageBitmap(pg)
+                        PaperPreview(
+                            bmp, if (vm.fmt == "pdf") vm.pdfSize else "fit", vm.numPos, vm.numSize, i + 1,
+                            Modifier.fillMaxSize(), pg.sigs, sigBmps,
+                        )
+                    }
                 }
             }
         }
 
         // controls
-        Surface(color = cs.surface, shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp), shadowElevation = 10.dp) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 10.dp)) {
-                if (cur != null) {
-                    // two tabs: effect | page size & page number (both show a live preview above)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TabPill(s.tabEffect, tab == 0, Modifier.weight(1f)) { tab = 0 }
-                        TabPill(s.tabSize, tab == 1, Modifier.weight(1f)) { tab = 1 }
-                        TabPill(s.pageNumber, tab == 2, Modifier.weight(1f)) { tab = 2 }
-                    }
-                    Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
-                        if (tab == 0) {
-                            // looks: small previews of YOUR page
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                LookTile(cur, "orig", s.fOrig, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "orig") }
-                                LookTile(cur, "color", s.fColor, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "color") }
-                                LookTile(cur, "vivid", s.fVivid, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "vivid") }
-                                LookTile(cur, "gray", s.fGray, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "gray") }
-                                LookTile(cur, "bw", s.fBw, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "bw") }
-                            }
-                            // the ONE slider (works for every look, "Original" too)
-                            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(if (cur.mode == "orig") s.clarity else s.strength, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("${cur.eff}%", fontSize = 15.sp, color = cs.primary, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.weight(1f))
-                                if (pages.size > 1) TextButton(onClick = { vm.applyLookToAll(cur) }) { Text(s.applyAll, fontSize = 13.sp, maxLines = 1) }
-                            }
-                            Slider(
-                                value = cur.eff.toFloat(), onValueChange = { vm.setLook(cur.id, clarity = it.roundToInt()) },
-                                valueRange = 0f..100f,
-                            )
-                            Text(
-                                when (cur.mode) { "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint; else -> s.clarityHint },
-                                fontSize = 12.sp, color = cs.onSurfaceVariant,
-                            )
-                            // text clarity: its own slider for every look except "Original" (there the slider above already is the text clarity)
-                            if (cur.mode != "orig") {
-                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(s.clarity, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("${cur.oClarity}%", fontSize = 15.sp, color = cs.primary, fontWeight = FontWeight.Bold)
-                                }
-                                Slider(
-                                    value = cur.oClarity.toFloat(), onValueChange = { vm.setLook(cur.id, text = it.roundToInt()) },
-                                    valueRange = 0f..100f,
-                                )
-                                Text(s.textHint, fontSize = 12.sp, color = cs.onSurfaceVariant)
-                            }
-                        } else {
-                            if (tab == 1) SizeControls(vm) else NumberControls(vm)
-                        }
-                    }
-
-                    // page actions
-                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        ActionBtn(s.rotate, onClick = { scope.launch { vm.rotate(cur.id) } }) { c -> Icon(Icons.Filled.Refresh, s.rotate, tint = c, modifier = Modifier.size(24.dp)) }
-                        ActionBtn(s.recrop, onClick = { vm.recrop(cur.id) }) { c -> Icon(Icons.Filled.Edit, s.recrop, tint = c, modifier = Modifier.size(24.dp)) }
-                        ActionBtn(s.retake, onClick = { vm.startRetake(cur.id) }) { c -> CameraGlyph(c) }
-                        ActionBtn(s.add, onClick = { vm.screen = Screen.Camera }) { c -> Icon(Icons.Filled.Add, s.add, tint = c, modifier = Modifier.size(24.dp)) }
-                        ActionBtn(s.delete, tint = cs.error, onClick = { askDelete = true }) { c -> Icon(Icons.Filled.Delete, s.delete, tint = c, modifier = Modifier.size(24.dp)) }
+        Surface(color = cs.surface, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp), shadowElevation = 14.dp) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 6.dp)) {
+                Box(Modifier.fillMaxWidth().height(22.dp).clickable { collapsed = !collapsed }, contentAlignment = Alignment.Center) {
+                    val tilt by animateFloatAlways(if (collapsed) 1f else 0f, tween(220), "handle")
+                    Canvas(Modifier.size(36.dp, 10.dp)) {
+                        val w = size.width; val h = size.height
+                        val st = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        val endY = h * (0.3f + 0.4f * tilt); val midY = h * (0.7f - 0.4f * tilt)
+                        val p = Path().apply { moveTo(w * 0.08f, endY); lineTo(w * 0.5f, midY); lineTo(w * 0.92f, endY) }
+                        drawPath(p, cs.outline, style = st)
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { exportMode = "save" }, modifier = Modifier.weight(1f).height(52.dp)) {
-                        Text(s.save, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                if (cur != null) {
+                    ReviewTabs(tab) { i -> vm.reviewTab = i; collapsed = false }
+                    ExpandVisible(visible = !collapsed) {
+                        Column(Modifier.fillMaxWidth().height(206.dp).verticalScroll(rememberScrollState()).padding(top = 10.dp)) {
+                            when (tab) {
+                                0 -> EffectControls(vm, cur)
+                                1 -> SignControls(vm, cur, sigBmps, onAdd = { addSig = true }, onDelete = { askSigDelete = it })
+                                2 -> SizeControls(vm)
+                                else -> NumberControls(vm)
+                            }
+                        }
                     }
-                    FilledTonalButton(onClick = { exportMode = "share" }, modifier = Modifier.weight(1f).height(52.dp)) {
-                        Text(s.share, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    // page actions
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        ActionBtn(s.rotate, onClick = { scope.launch { vm.rotate(cur.id) } }) { c -> Icon(Icons.Filled.Refresh, s.rotate, tint = c, modifier = Modifier.size(22.dp)) }
+                        ActionBtn(s.recrop, onClick = { vm.recrop(cur.id) }) { c -> Icon(Icons.Filled.Edit, s.recrop, tint = c, modifier = Modifier.size(22.dp)) }
+                        ActionBtn(s.retake, onClick = { vm.startRetake(cur.id) }) { c -> CameraGlyph(c) }
+                        ActionBtn(s.add, onClick = { vm.screen = Screen.Camera }) { c -> Icon(Icons.Filled.Add, s.add, tint = c, modifier = Modifier.size(22.dp)) }
+                        ActionBtn(s.delete, tint = cs.error, onClick = { askDelete = true }) { c -> Icon(Icons.Filled.Delete, s.delete, tint = c, modifier = Modifier.size(22.dp)) }
                     }
                 }
             }
@@ -304,6 +306,21 @@ fun ReviewScreen(vm: AppVM) {
 
     exportMode?.let { mode ->
         ExportDialog(vm, mode, onDismiss = { exportMode = null }, onGo = { exportMode = null; go(mode) })
+    }
+    if (addSig) {
+        SigAddDialog(
+            onDismiss = { addSig = false },
+            onCamera = { addSig = false; vm.camForSig = true; vm.screen = Screen.Camera },
+            onGallery = { addSig = false; pickSig.launch("image/*") },
+        )
+    }
+    askSigDelete?.let { sid ->
+        AlertDialog(
+            onDismissRequest = { askSigDelete = null },
+            text = { Text(s.sigDeleteAsk, fontSize = 17.sp) },
+            confirmButton = { TextButton(onClick = { askSigDelete = null; vm.deleteSignature(sid) }) { Text(s.delete, color = cs.error) } },
+            dismissButton = { TextButton(onClick = { askSigDelete = null }) { Text(s.cancel) } },
+        )
     }
     if (askReset) {
         AlertDialog(
@@ -340,6 +357,175 @@ fun ReviewScreen(vm: AppVM) {
     }
 }
 
+/** Four tabs with a coloured pill that slides from one tab to the next. */
+@Composable
+private fun ReviewTabs(selected: Int, onPick: (Int) -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    val labels = listOf(s.tabEffect, s.tabSign, s.tabSize, s.pageNumber)
+    val pos by animateFloatAlways(selected.toFloat(), tween(300, easing = FastOutSlowInEasing), "tabpos")
+    BoxWithConstraints(Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(20.dp)).background(cs.surfaceVariant)) {
+        val tabW = maxWidth / labels.size
+        Box(
+            Modifier.offset { IntOffset((pos * tabW.toPx()).roundToInt(), 0) }.width(tabW).fillMaxHeight().padding(4.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.horizontalGradient(listOf(cs.primary, androidx.compose.ui.graphics.lerp(cs.primary, cs.secondary, 0.4f)))),
+        )
+        Row(Modifier.fillMaxSize()) {
+            labels.forEachIndexed { i, label ->
+                val near = (1f - kotlin.math.abs(pos - i)).coerceIn(0f, 1f)
+                val c = androidx.compose.ui.graphics.lerp(cs.onSurfaceVariant, cs.onPrimary, near)
+                Column(
+                    Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).clickable { onPick(i) },
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+                ) {
+                    TabGlyph(i, c, Modifier.size(20.dp))
+                    Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = c, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
+    }
+}
+
+/** Tab "Effect": looks (small previews of the page) and the two sliders. */
+@Composable
+private fun EffectControls(vm: AppVM, cur: Page) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        LookTile(cur, "orig", s.fOrig, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "orig") }
+        LookTile(cur, "color", s.fColor, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "color") }
+        LookTile(cur, "vivid", s.fVivid, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "vivid") }
+        LookTile(cur, "gray", s.fGray, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "gray") }
+        LookTile(cur, "bw", s.fBw, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "bw") }
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (cur.mode == "orig") s.clarity else s.strength, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        ValueChip("${cur.eff}%")
+    }
+    FancySlider(cur.eff.toFloat(), { vm.setLook(cur.id, clarity = it.roundToInt()) }, range = 0f..100f)
+    Text(
+        when (cur.mode) { "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint; else -> s.clarityHint },
+        fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, maxLines = 2,
+    )
+    // text clarity: its own slider for every look except "Original" (there the slider above already is the text clarity)
+    if (cur.mode != "orig") {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(s.clarity, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            ValueChip("${cur.oClarity}%")
+        }
+        FancySlider(cur.oClarity.toFloat(), { vm.setLook(cur.id, text = it.roundToInt()) }, range = 0f..100f)
+        Text(s.textHint, fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, maxLines = 2)
+    }
+}
+
+@Composable
+private fun ValueChip(text: String) {
+    val cs = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(10.dp), color = cs.primaryContainer) {
+        Text(text, Modifier.padding(horizontal = 10.dp, vertical = 2.dp), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
+    }
+}
+
+/** Tab "Signature": the collection (tap = put on this page), and size / delete of the one that is selected on the page. */
+@Composable
+private fun SignControls(vm: AppVM, cur: Page, bmps: Map<String, ImageBitmap>, onAdd: () -> Unit, onDelete: (String) -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NewSigTile(onAdd)
+        for (sg in vm.signatures) {
+            key(sg.id) { SigTile(bmps[sg.id], onClick = { vm.placeSig(cur.id, sg.id) }, onLong = { onDelete(sg.id) }) }
+        }
+    }
+    Text(
+        if (vm.signatures.isEmpty()) s.sigEmptyHint else s.sigLibHint,
+        fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp),
+    )
+    val sel = cur.sigs.firstOrNull { it.id == vm.selSig }
+    if (sel != null) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(s.sigSize, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            ValueChip("${(sel.w * 100f).roundToInt()}%")
+        }
+        FancySlider(sel.w, { v -> vm.updateSig(cur.id, sel.id) { it.copy(w = v) } }, range = 0.05f..1f)
+        Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (vm.pages.size > 1) FilledTonalButton(onClick = { vm.copySigToAll(cur.id, sel.id) }, modifier = Modifier.weight(1f)) { Text(s.sigAllPages, fontSize = 13.sp, maxLines = 1) }
+            OutlinedButton(onClick = { vm.removeSig(cur.id, sel.id) }, modifier = Modifier.weight(1f)) { Text(s.delete, fontSize = 13.sp, color = cs.error, maxLines = 1) }
+        }
+    } else if (cur.sigs.isNotEmpty()) {
+        Text(s.sigPlaced, fontSize = 11.sp, lineHeight = 14.sp, color = cs.primary, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+@Composable
+private fun NewSigTile(onClick: () -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier.size(84.dp, 58.dp).clip(RoundedCornerShape(14.dp)).background(cs.primaryContainer).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Filled.Add, s.sigNew, tint = cs.onPrimaryContainer, modifier = Modifier.size(24.dp))
+            Text(s.sigNew, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
+        }
+    }
+}
+
+@Composable
+private fun SigTile(bmp: ImageBitmap?, onClick: () -> Unit, onLong: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier.size(84.dp, 58.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, cs.outline, RoundedCornerShape(14.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLong),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawChecker(Offset.Zero, size, 8.dp.toPx())
+            val b = bmp ?: return@Canvas
+            val pad = 6.dp.toPx()
+            val k = min((size.width - 2 * pad) / b.width, (size.height - 2 * pad) / b.height)
+            val w = b.width * k; val h = b.height * k
+            drawImage(
+                b, srcOffset = IntOffset.Zero, srcSize = IntSize(b.width, b.height),
+                dstOffset = IntOffset(((size.width - w) / 2f).roundToInt(), ((size.height - h) / 2f).roundToInt()),
+                dstSize = IntSize(w.roundToInt().coerceAtLeast(1), h.roundToInt().coerceAtLeast(1)),
+            )
+        }
+    }
+}
+
+/** "Add a signature": camera or gallery, and a short list of how to get the cleanest result. */
+@Composable
+private fun SigAddDialog(onDismiss: () -> Unit, onCamera: () -> Unit, onGallery: () -> Unit) {
+    val s = LocalStr.current
+    val cs = MaterialTheme.colorScheme
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = cs.surface) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
+                Text(s.sigAddTitle, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text(s.sigAddSub, fontSize = 13.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onCamera, modifier = Modifier.weight(1f).height(52.dp)) { Text(s.sigCamera, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+                    FilledTonalButton(onClick = onGallery, modifier = Modifier.weight(1f).height(52.dp)) { Text(s.sigGallery, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
+                }
+                Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(s.sigTipsTitle, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.primary)
+                        for ((i, t) in listOf(s.sigTip1, s.sigTip2, s.sigTip3, s.sigTip4, s.sigTip5).withIndex()) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                Text("${i + 1}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.primary, modifier = Modifier.width(18.dp))
+                                Text(t, fontSize = 12.sp, lineHeight = 16.sp, color = cs.onSurface)
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text(s.cancel) }
+            }
+        }
+    }
+}
+
 /** The picture of a page (the filtered preview when there is one). Keeps the old picture while a new one loads. */
 @Composable
 private fun rememberPageBitmap(pg: Page): State<ImageBitmap?> {
@@ -366,7 +552,7 @@ private fun turned(b: ImageBitmap, turns: Int): ImageBitmap {
  * when it is ready, a bright line wipes across the page and reveals the new look over the old one.
  */
 @Composable
-private fun EffectPage(pg: Page, onZoomed: (Boolean) -> Unit = {}) {
+private fun EffectPage(pg: Page, sigBmps: Map<String, ImageBitmap> = emptyMap(), onZoomed: (Boolean) -> Unit = {}) {
     val s = LocalStr.current
     // pinch with two fingers to zoom, drag to move (when zoomed), double tap to zoom in / back
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -471,6 +657,7 @@ private fun EffectPage(pg: Page, onZoomed: (Boolean) -> Unit = {}) {
             } else {
                 drawImage(cur, dstOffset = off, dstSize = dst)
             }
+            drawSigs(pg.sigs, sigBmps, ox, oy, dw, dh)
             if (busyA > 0.01f) {
                 val sweep = (clock.value / 1.3f) % 1f
                 drawRect(Color.Black.copy(alpha = 0.10f * busyA), Offset(ox, oy), Size(dw, dh))
@@ -613,7 +800,7 @@ private fun LookTile(p: Page, mode: String, label: String, modifier: Modifier, o
     val bmp = remember(raw, p.rot) { raw?.let { turned(it, p.rot) } }
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.fillMaxWidth().height(62.dp).clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant)
+            Modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant)
                 .border(if (sel) 3.dp else 1.dp, if (sel) cs.primary else cs.outline, RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {

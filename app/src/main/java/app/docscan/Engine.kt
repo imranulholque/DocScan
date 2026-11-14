@@ -85,15 +85,30 @@ object Engine {
     /** number = page number to print (used when numPos is not "off"), numPos = off | tl tc tr bl bc br. */
     suspend fun exportImage(
         path: String, dst: String, fmt: String, mode: String, clarity: Int,
-        number: Int, numPos: String, numSize: Int, fontPath: String, textClarity: Int = 0, turns: Int = 0,
+        number: Int, numPos: String, numSize: Int, fontPath: String, textClarity: Int = 0, turns: Int = 0, sigs: String = "",
     ) {
-        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble(), number, numPos, numSize.toDouble(), fontPath, textClarity.toDouble(), turns) }
+        py { mod.callAttr("export_image", path, dst, fmt, mode, clarity.toDouble(), number, numPos, numSize.toDouble(), fontPath, textClarity.toDouble(), turns, sigs) }
     }
 
-    class PdfItem(val path: String, val mode: String, val clarity: Int, val textClarity: Int, val turns: Int)
+    /** sigs = the signatures on this page as engine.sign_page wants them ("path~cx~cy~width~rot~alpha" joined by ";"). */
+    class PdfItem(val path: String, val mode: String, val clarity: Int, val textClarity: Int, val turns: Int, val sigs: String = "")
 
     suspend fun makePdf(pages: List<PdfItem>, dst: String, pageSize: String, numPos: String, numSize: Int) {
-        val lines = pages.joinToString("\n") { "${it.path}|${it.mode}|${it.clarity}|${it.textClarity}|${it.turns}" }
+        val lines = pages.joinToString("\n") { "${it.path}|${it.mode}|${it.clarity}|${it.textClarity}|${it.turns}|${it.sigs}" }
         py { mod.callAttr("make_pdf", lines, dst, pageSize, numPos, numSize.toDouble()) }
+    }
+
+    // ------------------------------------------------------------ signatures (Image Fixer's background remover, run by Chaquopy)
+    /** Where the writing is on a picture: a box (picture pixels) around the ink. */
+    suspend fun sigGuess(path: String): List<Float> = py {
+        mod.callAttr("sig_guess", path).toString().split(",").map { it.toFloat() }
+    }
+
+    /** Picture cropped to [box] (l, t, r, b) -> transparent PNG at [dst]. Returns its size. */
+    suspend fun sigMake(
+        src: String, dst: String, box: List<Float>, strength: Int, uneven: Boolean, tint: String, remove: Boolean, bold: Int, maxSide: Int,
+        trim: Boolean = true,
+    ): Pair<Int, Int> = py {
+        size(mod.callAttr("sig_make", src, dst, box.joinToString(",") { it.toString() }, strength, uneven, tint, remove, bold, maxSide, trim).toString())
     }
 }

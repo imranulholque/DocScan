@@ -82,6 +82,7 @@ object Paper {
 fun PaperPreview(
     bmp: ImageBitmap?, paper: String, pos: String, numSize: Int, number: Int,
     modifier: Modifier = Modifier,
+    sigs: List<SigPlace> = emptyList(), sigBmps: Map<String, ImageBitmap> = emptyMap(),
 ) {
     val ctx = LocalContext.current
     val mark = MaterialTheme.colorScheme.primary
@@ -124,6 +125,7 @@ fun PaperPreview(
                 dstSize = IntSize((idw * sc).roundToInt().coerceAtLeast(1), (idh * sc).roundToInt().coerceAtLeast(1)),
             )
         }
+        if (sigs.isNotEmpty()) drawSigs(sigs, sigBmps, left + ix * sc, top + iy * sc, idw * sc, idh * sc)
         if (na > 0.01f) {
             paint.textSize = ns * sc
             paint.alpha = (na * 255f).roundToInt().coerceIn(0, 255)
