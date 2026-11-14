@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
@@ -154,7 +155,7 @@ fun DrawScope.drawChecker(origin: Offset, area: Size, cell: Float, c1: Color = C
  */
 fun DrawScope.drawSigs(sigs: List<SigPlace>, bmps: Map<String, ImageBitmap>, ox: Float, oy: Float, dw: Float, dh: Float) {
     if (sigs.isEmpty()) return
-    androidx.compose.ui.graphics.drawscope.clipRect(ox, oy, ox + dw, oy + dh) {
+    clipRect(ox, oy, ox + dw, oy + dh) {
         for (pl in sigs) {
             val b = bmps[pl.sigId] ?: continue
             val wpx = pl.w * dw
