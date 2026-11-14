@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5          # Chaquopy needs a Python on the build machine
+        with:
+          python-version: "3.11"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build APK (with OpenCV - the same page finder as the PC program)
+        id: with_cv
+        continue-on-error: true
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Build APK again without OpenCV (only if the first build failed)
+        if: steps.with_cv.outcome == 'failure'
+        run: |
+          echo "::warning::OpenCV was not available for Chaquopy - building without it (older, slower page finder)."
+          gradle :app:assembleRelease --no-daemon --stacktrace -PnoCv=true
+
+      - name: Name the APK
+        run: cp app/build/outputs/apk/release/app-release.apk DocScan.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DocScan-apk
+          path: DocScan.apk
+
+      - name: Publish a release (download the APK from your phone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git log -1 --pretty=%B > notes.txt          # what is new = the commit message; the app shows it in the update question
+          gh release create "build-${BUILD_NUMBER}" DocScan.apk \
+            --title "DocScan build ${BUILD_NUMBER}" \
+            --notes-file notes.txt \
+            --latest
