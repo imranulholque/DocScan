@@ -89,6 +89,17 @@ fun SettingsScreen(vm: AppVM) {
             FormatPicker(vm)
             LocationPicker(vm)
 
+            SectionLabel(s.autoCrop)
+            Surface(shape = RoundedCornerShape(14.dp), color = cs.surfaceVariant) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(s.autoCrop, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(s.autoCropSub, fontSize = 12.sp, color = cs.onSurfaceVariant)
+                    }
+                    Switch(checked = vm.autoCrop, onCheckedChange = { vm.chooseAutoCrop(it) })
+                }
+            }
+
             SectionLabel(s.updTitle)
             Surface(shape = RoundedCornerShape(14.dp), color = cs.surfaceVariant) {
                 Column(Modifier.fillMaxWidth().padding(14.dp)) {

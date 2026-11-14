@@ -46,12 +46,36 @@ def prepare(src, dst, max_side=2600):
     return "%d,%d" % im.size
 
 
+DETECT_SIDE = 1400           # the page finder works on a copy with this long side (it shrinks further inside): faster on a phone
+
+
+def _full_frame(W, H, m=0.01):
+    return [(W * m, H * m), (W * (1 - m), H * m), (W * (1 - m), H * (1 - m)), (W * m, H * (1 - m))]
+
+
 def detect(path):
-    """The PC program's Auto crop finder (scanner.detect_document), same call, same thresholds.
+    """The PC program's Auto crop finder (scanner.detect_document thresholds), run on a smaller copy.
+    Only the fast OpenCV finder is used here: when it finds no sheet at all the old finder (it needs many seconds on a phone,
+    and the screen looked stuck) is NOT asked; the whole picture is returned as 'not sure' so the person can drag the corners.
     Returns 'sure|x0,y0,x1,y1,x2,y2,x3,y3' (TL,TR,BR,BL in picture pixels); sure = 1 / 0."""
     im = _open(path)
     W, H = im.size
-    quad, found, info = scanner.detect_document(im, return_score=True)
+    k = DETECT_SIDE / float(max(W, H))
+    small = im.resize((max(8, round(W * k)), max(8, round(H * k))), Image.Resampling.BILINEAR) if k < 1.0 else im
+    if k >= 1.0:
+        k = 1.0
+    if scanner.cv2 is not None:
+        try:
+            res = scanner._detect_fast(small)
+        except Exception:
+            res = None
+        if res is None:
+            q = _full_frame(W, H)
+            return "0|%s" % ",".join("%.2f" % v for p in q for v in p)
+        quad, found, info = res
+        quad = [(x / k, y / k) for x, y in quad]
+    else:                                                   # no OpenCV in this build: the older finder
+        quad, found, info = scanner.detect_document(im, return_score=True)
     area = abs(sum(quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1] for i in range(4))) / 2.0
     sure = bool(found and info["score"] >= AUTO_OK_SCORE and info["edge"] >= AUTO_OK_EDGE and area >= 0.08 * W * H)
     q = _inset(quad)

@@ -67,9 +67,12 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         private set
     var numSize by mutableIntStateOf(prefs.getInt("numSize", 12))                // points, Times New Roman
         private set
+    var autoCrop by mutableStateOf(prefs.getBoolean("autoCrop", true))   // find the page by itself after a photo
+        private set
     val str: Str get() = if (lang == "bn") Bn else En
 
     fun chooseLang(v: String) { lang = v; prefs.edit().putString("lang", v).apply() }
+    fun chooseAutoCrop(on: Boolean) { autoCrop = on; prefs.edit().putBoolean("autoCrop", on).apply() }
     fun chooseFmt(v: String) { fmt = v; prefs.edit().putString("fmt", v).apply() }
     fun choosePdfSize(v: String) { pdfSize = v; prefs.edit().putString("pdfSize", v).apply() }
     fun setTree(v: String?) { treeUri = v; prefs.edit().putString("tree", v).apply() }
@@ -173,8 +176,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         return try {
             val (w, h) = try {
                 prepareNative(src, work)
-            } catch (e: Exception) {
-                Engine.prepare(src.absolutePath, work.absolutePath)      // rare formats: the Python way
+            } catch (e: Throwable) {                                      // rare formats, or a phone with little memory (OutOfMemoryError):
+                if (e is CancellationException) throw e
+                Engine.prepare(src.absolutePath, work.absolutePath)      // the Python way (slower, but safe)
             }
             pages.add(Page(id, work.absolutePath, w, h))
             id
