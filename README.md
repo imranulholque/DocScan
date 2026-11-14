@@ -57,3 +57,17 @@ Works like Image Fixer's updater, with the same rules:
 ## Looks (latest)
 - Every new page starts as **Original** (no effect). Pick Color / Vivid / Gray / B&W and use the slider like Lightroom's amount: 0 = original, 60 = the look as designed (default), 100 = stronger.
 - Camera takes about 8 MP photos in low-latency mode (fast shutter, text stays sharp).
+
+## New in this version
+- **Signature tab** (Review screen). Add a signature from the camera (own guide: paper outline, light checks) or from the gallery:
+  1. *Crop*: a box jumps around the writing by itself (`engine.sig_guess`); fix it by dragging corners / sides, or draw a new box on the picture.
+  2. *Clean*: Image Fixer's `core.remove_background` takes the paper away (strength, "uneven paper / shadow", darker ink, ink colour Original / Black / Blue).
+     The result is shown on a checkerboard, press and hold to compare with the original.
+  Signatures are kept in the app (transparent PNG) and can be put on any page: drag to move, pinch to resize + turn, or use the round corner handle.
+  "All pages" copies one to every page. They are drawn into the saved PDF / JPG / PNG at full quality (`engine.sign_page`), under the page number.
+- **Manual crop**: on the crop screen choose **Corners** (perspective, like auto crop: drag corners / sides) or **Rectangle** (draw a straight box,
+  drag it, resize it). A round magnifier shows the exact spot under your finger.
+- **Review screen** redesigned: compact controls panel (fold it down with the handle to give the page all the room), 4 tabs with a sliding pill
+  (Effect / Signature / Page size / Page number), new sliders, Save and Share in the top bar, Reset all in the ⋮ menu.
+- **Camera** gives better instructions: too dark / shadow on the paper / glare messages, auto focus when steady, and a **?** Tips button
+  (shown automatically the first time). Signature photos have their own tips.
