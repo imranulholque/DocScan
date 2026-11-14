@@ -310,7 +310,7 @@ private fun CropBody(vm: AppVM, page: Page) {
                         drawCircle(Color.White, stroke * 2.2f, Offset(x, y))
                     }
                     // 6. corner brackets that move in and out
-                    val gap: Float = min(iw, ih) * 0.05f * breathe2
+                    val gap: Float = min(iw, ih) * 0.05f * breathe
                     val bx0: Float = ox + gap
                     val by0: Float = oy + gap
                     val bx1: Float = ox + iw - gap
