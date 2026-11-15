@@ -232,9 +232,56 @@ def _vivid(im, clarity):
     return Image.fromarray(arr)
 
 
+EXTRA = ("whiteboard", "saver", "restore", "hand", "bold", "night")
+
+
+def _extra_look(im, mode, clarity):
+    """Purpose-made looks built from the same Image Fixer parts (shadow remover, clarity):
+    whiteboard  boards / glossy notes: pure white background, bright marker colours
+    saver       ink saver: lighter text on white, prints with less toner
+    restore     old, faded, yellowed papers: weak text comes back, paper turns white (colours kept)
+    hand        pencil / pen notes: thin light strokes become dark and clear (grey)
+    bold        thin or broken print, photocopies: thicker solid black text
+    night       dark mode: white text on a dark page, for reading at night"""
+    import numpy as np
+    from PIL import ImageFilter
+    t = max(0.0, min(1.0, float(clarity) / 100.0))
+    im = im.convert("RGB")
+    if mode == "whiteboard":
+        _, shadow, sharp = look("color", clarity)
+        shadow = dict(shadow)
+        shadow.update(white=int(70 + 25 * t), ink=int(55 + 25 * t), clean=int(60 + 35 * t))
+        out = core.remove_shadow(im, 0.5 + 0.5 * t, None, shadow).convert("RGB")
+        arr = np.asarray(out).astype(np.float32)
+        Y = arr.mean(2, keepdims=True)
+        arr = np.clip(Y + (arr - Y) * (1.25 + 0.25 * t), 0, 255).astype(np.uint8)
+        return Image.fromarray(core.clarity(arr, sharp))
+    if mode == "restore":
+        pre = core.clarity(np.asarray(im), core.new_look(dark=int(90 * t), clear=int(50 * t), detail=int(100 * t), sharp=int(60 * t)))
+        return _full_look(Image.fromarray(pre), "color", clarity)
+    if mode == "hand":
+        pre = core.clarity(np.asarray(im), core.new_look(dark=int(80 * t), clear=int(40 * t), detail=int(70 * t), sharp=int(50 * t)))
+        g = np.asarray(_full_look(Image.fromarray(pre), "gray", clarity).convert("L"), dtype=np.float32) / 255.0
+        out = g ** (1.6 + 1.4 * t)
+    elif mode == "bold":
+        bw = _full_look(im, "bw", clarity).convert("L")
+        mx = max(bw.size)                                       # the same relative thickness for the small preview and the full page
+        k = 3 if mx < 1800 else (5 if mx < 3600 else 7)
+        return bw.filter(ImageFilter.MinFilter(k)).convert("RGB")
+    else:
+        g = np.asarray(_full_look(im, "gray", clarity).convert("L"), dtype=np.float32) / 255.0
+        if mode == "saver":
+            out = 1.0 - (1.0 - g) * (0.85 - 0.25 * t)
+        else:                                                  # night
+            out = 0.07 + 0.86 * (1.0 - g)
+    return Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)).convert("RGB")
+
+
 def _full_look(im, mode, clarity):
     """The look at full strength for this slider value (the old 'apply')."""
     import numpy as np
+    if mode in EXTRA:
+        return _extra_look(im, mode, clarity)
     if mode == "vivid":
         return _vivid(im, clarity)
     t, shadow, sharp = look(mode, clarity)
@@ -415,7 +462,7 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
 
 def thumbs(path, prefix, clarity=60):
     """Small previews of the page (Original / Color / Vivid / Gray / B&W) for the look picker."""
-    for m in ("orig", "color", "vivid", "gray", "bw"):
+    for m in ("orig", "color", "vivid", "gray", "bw") + EXTRA:
         render(path, "%s_%s.jpg" % (prefix, m), m, 0 if m == "orig" else clarity, 220)
     return "ok"
 
