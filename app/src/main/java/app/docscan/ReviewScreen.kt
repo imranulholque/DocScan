@@ -135,6 +135,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -407,7 +408,7 @@ private fun EffectControls(vm: AppVM, cur: Page) {
     // all the looks in one row that scrolls sideways (the first five are the classics, the rest are made for one purpose each)
     val looks = listOf(
         "orig" to s.fOrig, "color" to s.fColor, "vivid" to s.fVivid, "gray" to s.fGray, "bw" to s.fBw,
-        "whiteboard" to s.fWhiteboard, "saver" to s.fSaver, "restore" to s.fRestore, "hand" to s.fHand, "bold" to s.fBold, "night" to s.fNight,
+        "noshadow" to s.fNoShadow, "lighten" to s.fLighten, "whiteboard" to s.fWhiteboard,
     )
     val rowScroll = rememberScrollState()
     Row(Modifier.fillMaxWidth().horizontalScroll(rowScroll), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -421,7 +422,7 @@ private fun EffectControls(vm: AppVM, cur: Page) {
     Text(
         when (cur.mode) {
             "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint
-            "whiteboard", "saver", "restore", "hand", "bold", "night" -> s.extraHint(cur.mode)
+            "noshadow", "lighten", "whiteboard" -> s.extraHint(cur.mode)
             else -> s.clarityHint
         },
         fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, maxLines = 2,
@@ -604,6 +605,15 @@ private fun EffectPage(pg: Page, sigBmps: Map<String, ImageBitmap> = emptyMap(),
     val busyA by animateFloatAlways(if (working) 1f else 0f, tween(250), "busy")
     val label = if (pg.prevKey.substringBefore(':') != pg.mode) s.applyingEffect else s.enhancing
 
+    // press and hold the page: the straightened page WITHOUT any effect is shown; let go and the effect is back
+    var holding by remember { mutableStateOf(false) }
+    val origRaw by produceState<ImageBitmap?>(pg.cropped?.let { cachedBitmap(it, 1400) }, pg.cropped, holding) {
+        val path = pg.cropped
+        if (holding && path != null && value == null) value = withContext(Dispatchers.IO) { decodeBitmap(path, 1400) }
+    }
+    val orig = remember(origRaw, pg.rot) { origRaw?.let { turned(it, pg.rot) } }
+    val origA by animateFloatAlways(if (holding && orig != null) 1f else 0f, tween(80), "orig")
+
     Box(
         Modifier.fillMaxSize().clipToBounds()
             .pointerInput(Unit) {
@@ -618,6 +628,36 @@ private fun EffectPage(pg: Page, sigBmps: Map<String, ImageBitmap> = emptyMap(),
                             t.y.coerceIn(-size.height * (nz - 1f) / 2f, size.height * (nz - 1f) / 2f))
                     }
                 })
+            }
+            .pointerInput(Unit) {
+                // a finger that rests on the page (does not move, no second finger) for a moment = "show me the original"
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val slop = viewConfiguration.touchSlop * 1.5f
+                    val moved = withTimeoutOrNull(350L) {
+                        var ok = true
+                        while (ok) {
+                            val ev = awaitPointerEvent()
+                            val pr = ev.changes.filter { it.pressed }
+                            if (pr.isEmpty() || pr.size >= 2 || (pr[0].position - down.position).getDistance() > slop) ok = false
+                        }
+                        true
+                    }
+                    if (moved == null) {
+                        holding = true
+                        try {
+                            var go = true
+                            while (go) {
+                                val ev = awaitPointerEvent()
+                                val pr = ev.changes.filter { it.pressed }
+                                // finger lifted (or a second finger / a big move = a zoom or a swipe): the effect comes back at once
+                                go = pr.size == 1 && (pr[0].position - down.position).getDistance() <= slop * 3f
+                            }
+                        } finally {
+                            holding = false
+                        }
+                    }
+                }
             }
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -675,6 +715,8 @@ private fun EffectPage(pg: Page, sigBmps: Map<String, ImageBitmap> = emptyMap(),
             } else {
                 drawImage(cur, dstOffset = off, dstSize = dst)
             }
+            val ob = orig
+            if (origA > 0.01f && ob != null) drawImage(ob, dstOffset = off, dstSize = dst, alpha = origA)
             drawSigs(pg.sigs, sigBmps, ox, oy, dw, dh)
             if (busyA > 0.01f) {
                 val sweep = (clock.value / 1.3f) % 1f
@@ -690,6 +732,11 @@ private fun EffectPage(pg: Page, sigBmps: Map<String, ImageBitmap> = emptyMap(),
                         Offset(cx - bw / 2f, oy), Size(bw, dh),
                     )
                 }
+            }
+        }
+        PopVisible(visible = holding && orig != null, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp)) {
+            Surface(shape = RoundedCornerShape(20.dp), color = Color(0xCC111827)) {
+                Text(s.showingOrig, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
             }
         }
         PopVisible(visible = working, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)) {
