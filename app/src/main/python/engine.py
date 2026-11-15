@@ -232,49 +232,63 @@ def _vivid(im, clarity):
     return Image.fromarray(arr)
 
 
-EXTRA = ("whiteboard", "saver", "restore", "hand", "bold", "night")
+EXTRA = ("noshadow", "lighten", "whiteboard")
+
+
+def _light_gain(rgb_arr, t, reach):
+    """A smooth map (H x W) that says how much brighter each place must get so the paper is evenly lit.
+    The paper brightness is estimated on a small copy (dilate = the writing disappears, then a strong blur), so the correction follows
+    soft shadows and never the edges of the writing. reach = how much brighter a place may get (1.0 = twice)."""
+    import numpy as np
+    from PIL import ImageFilter
+    H, W = rgb_arr.shape[:2]
+    k = 420.0 / max(W, H)
+    sw, sh = max(16, round(W * k)), max(16, round(H * k))
+    small = Image.fromarray(rgb_arr).resize((sw, sh), Image.Resampling.BOX).convert("L")
+    bg = small.filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.GaussianBlur(0.035 * max(sw, sh)))
+    b = np.asarray(bg, dtype=np.float32)
+    target = float(np.percentile(b, 92))
+    g = np.clip(target / np.maximum(b, 30.0), 1.0, 1.0 + reach) ** (0.55 + 0.45 * t)
+    gm = Image.fromarray(g.astype(np.float32), "F").resize((W, H), Image.Resampling.BICUBIC)
+    return np.asarray(gm, dtype=np.float32)
 
 
 def _extra_look(im, mode, clarity):
-    """Purpose-made looks built from the same Image Fixer parts (shadow remover, clarity):
-    whiteboard  boards / glossy notes: pure white background, bright marker colours
-    saver       ink saver: lighter text on white, prints with less toner
-    restore     old, faded, yellowed papers: weak text comes back, paper turns white (colours kept)
-    hand        pencil / pen notes: thin light strokes become dark and clear (grey)
-    bold        thin or broken print, photocopies: thicker solid black text
-    night       dark mode: white text on a dark page, for reading at night"""
+    """Looks that keep the page natural (the colours stay) and fix what a phone photo gets wrong:
+    noshadow    even light: soft shadows of the hand, the phone or a curled page are taken away
+    lighten     brighter, whiter page: lifts a dull or dark photo, colours stay
+    whiteboard  boards and glossy notes: shadows and glare-free white background, stronger marker colours"""
     import numpy as np
-    from PIL import ImageFilter
     t = max(0.0, min(1.0, float(clarity) / 100.0))
-    im = im.convert("RGB")
-    if mode == "whiteboard":
-        _, shadow, sharp = look("color", clarity)
-        shadow = dict(shadow)
-        shadow.update(white=int(70 + 25 * t), ink=int(55 + 25 * t), clean=int(60 + 35 * t))
-        out = core.remove_shadow(im, 0.5 + 0.5 * t, None, shadow).convert("RGB")
-        arr = np.asarray(out).astype(np.float32)
-        Y = arr.mean(2, keepdims=True)
-        arr = np.clip(Y + (arr - Y) * (1.25 + 0.25 * t), 0, 255).astype(np.uint8)
-        return Image.fromarray(core.clarity(arr, sharp))
-    if mode == "restore":
-        pre = core.clarity(np.asarray(im), core.new_look(dark=int(90 * t), clear=int(50 * t), detail=int(100 * t), sharp=int(60 * t)))
-        return _full_look(Image.fromarray(pre), "color", clarity)
-    if mode == "hand":
-        pre = core.clarity(np.asarray(im), core.new_look(dark=int(80 * t), clear=int(40 * t), detail=int(70 * t), sharp=int(50 * t)))
-        g = np.asarray(_full_look(Image.fromarray(pre), "gray", clarity).convert("L"), dtype=np.float32) / 255.0
-        out = g ** (1.6 + 1.4 * t)
-    elif mode == "bold":
-        bw = _full_look(im, "bw", clarity).convert("L")
-        mx = max(bw.size)                                       # the same relative thickness for the small preview and the full page
-        k = 3 if mx < 1800 else (5 if mx < 3600 else 7)
-        return bw.filter(ImageFilter.MinFilter(k)).convert("RGB")
-    else:
-        g = np.asarray(_full_look(im, "gray", clarity).convert("L"), dtype=np.float32) / 255.0
-        if mode == "saver":
-            out = 1.0 - (1.0 - g) * (0.85 - 0.25 * t)
-        else:                                                  # night
-            out = 0.07 + 0.86 * (1.0 - g)
-    return Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)).convert("RGB")
+    rgb = np.asarray(im.convert("RGB"))
+    x = rgb.astype(np.float32) / 255.0
+    Y = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+
+    def white_to(x, pct, to):
+        Yv = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+        wp = float(np.percentile(Yv[::max(1, Yv.shape[0] // 400), ::max(1, Yv.shape[1] // 400)], pct))
+        return np.clip(x * (to / max(wp, 0.25)), 0.0, 1.0)
+
+    def black_from(x, pct, cap):
+        Yv = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+        lo = min(cap, float(np.percentile(Yv[::max(1, Yv.shape[0] // 400), ::max(1, Yv.shape[1] // 400)], pct)))
+        return np.clip((x - lo * (0.4 + 0.6 * t)) / (1.0 - lo * (0.4 + 0.6 * t)), 0.0, 1.0)
+
+    if mode == "noshadow":
+        x = np.clip(x * _light_gain(rgb, t, 0.7)[..., None], 0.0, 1.0)
+        x = black_from(white_to(x, 75, 0.97), 0.6, 0.25)
+    elif mode == "lighten":
+        x = white_to(x, 82, 0.96 + 0.03 * t)
+        med = float(np.percentile(Y[::max(1, Y.shape[0] // 300), ::max(1, Y.shape[1] // 300)], 50))
+        gam = float(np.clip(np.log(0.62) / np.log(max(med, 0.08)), 0.6, 1.0))      # a dark photo is lifted more, a bright one not at all
+        x = x ** (1.0 - (1.0 - gam) * (0.5 + 0.5 * t))
+    else:                                                                              # whiteboard
+        x = np.clip(x * _light_gain(rgb, t, 1.0)[..., None], 0.0, 1.0)
+        x = black_from(white_to(x, 70, 0.98), 0.6, 0.25)
+        Yv = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+        x = np.clip(Yv[..., None] + (x - Yv[..., None]) * (1.2 + 0.5 * t), 0.0, 1.0)  # stronger marker colours
+        x = np.clip((x - 0.04 * t) / (1.0 - 0.04 * t), 0.0, 1.0) ** (1.0 + 0.5 * t * (1.0 - Yv[..., None]))   # background to pure white, ink a little darker
+    return Image.fromarray(np.clip(x * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
 
 def _full_look(im, mode, clarity):
