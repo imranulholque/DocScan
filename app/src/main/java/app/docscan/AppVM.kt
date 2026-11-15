@@ -141,6 +141,67 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var busy by mutableStateOf<String?>(null)
     var saved by mutableStateOf<Saved?>(null)
 
+    // ------------------------------------------------------------ ID card: front, then back -> ONE page
+    /** 0 = normal scanning, 1 = the FRONT of the card is being taken / cut, 2 = the BACK. */
+    var idStep by mutableIntStateOf(0)
+        private set
+    private var idFrontId: String? = null
+    private var idBackId: String? = null
+    private var idComposing = false
+    /** Length of the card's long side on the paper, mm (86 = real size, 120 = large). */
+    var idSize by mutableIntStateOf(prefs.getInt("idSize", 86))
+        private set
+
+    fun chooseIdSize(v: Int) { idSize = v; prefs.edit().putInt("idSize", v).apply() }
+
+    fun startIdCard() {
+        dropIdPages()
+        idStep = 1; retakeId = null; camForSig = false
+        screen = Screen.Camera
+    }
+
+    private fun dropIdPages() {
+        for (pid in listOfNotNull(idFrontId, idBackId)) page(pid)?.let { del(it.work); del(it.cropped); del(it.prev); pages.remove(it) }
+        idFrontId = null; idBackId = null
+    }
+
+    /** Leaves ID card mode without a result (the person went back): the half-made card pages are removed. */
+    fun cancelIdCard() {
+        if (idStep == 0) return
+        dropIdPages(); idStep = 0
+        current = current.coerceIn(0, max(0, pages.size - 1))
+    }
+
+    /** Both sides are cut out: put them on one A4 page (engine.id_card) and open it on the review screen like any other page. */
+    private fun composeIdCard(frontId: String, backId: String) {
+        idComposing = true
+        viewModelScope.launch {
+            busy = str.idMaking
+            try {
+                val f = page(frontId)?.cropped
+                val b = page(backId)?.cropped
+                if (f == null || b == null) throw IllegalStateException("card picture missing")
+                val id = newId()
+                val dst = file(id, "idcard")
+                val (w, h) = Engine.idCard(f, b, dst, idSize)
+                dropIdPages()
+                pages.add(Page(id, dst, w, h, cropped = dst, cw = w, ch = h))
+                current = pages.size - 1
+                idStep = 0
+                screen = Screen.Review
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast(str.errPrefix + (e.message ?: ""))
+                cancelIdCard()
+                screen = if (pages.any { it.cropped != null }) Screen.Review else Screen.Home
+            } finally {
+                idComposing = false
+                busy = null
+            }
+        }
+    }
+
     // ------------------------------------------------------------ camera -> crop hand-over, and "Retake"
     /** The first page in the crop queue was just taken with the shutter (the crop screen then says "photo taken, move the phone away"). */
     var cropFromShutter by mutableStateOf(false)
@@ -323,6 +384,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         del(p.cropped); del(p.prev)
         upd(id) { it.copy(cropped = dst, quad = quad, rot = 0, prev = null, prevKey = "", prevSide = 0, thumbs = null, cw = cw, ch = ch) }
         replace?.let { (newId, oldId) -> if (newId == id) swapIn(newId, oldId) }
+        // ID card mode: the first finished crop is the FRONT, the next one the BACK
+        if (idStep == 1 && idFrontId == null) { idFrontId = id; idStep = 2 }
+        else if (idStep == 2 && idBackId == null && id != idFrontId) idBackId = id
     }
 
     /** Retake: the new page takes the old page's place (same position, same look), the old page is gone. */
@@ -354,6 +418,12 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     /** Queue empty and nothing more is being prepared: leave the crop screen. */
     fun finishCropIfDone() {
         if (screen != Screen.Crop || cropQueue.isNotEmpty() || importing > 0) return
+        if (idStep > 0) {                                           // ID card: front done -> camera for the back; back done -> one page
+            val f = idFrontId; val b = idBackId
+            replace = null; retakeId = null
+            if (f != null && b != null) { if (!idComposing) composeIdCard(f, b) } else screen = Screen.Camera
+            return
+        }
         val back = cropReturn
         replace = null; retakeId = null
         screen = if (back == Screen.Review && pages.none { it.cropped != null }) Screen.Home else back
@@ -448,6 +518,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearAll() {
+        idStep = 0; idFrontId = null; idBackId = null
         pages.clear(); cropQueue = emptyList(); current = 0; saved = null; selSig = null; reviewTab = 0
         undoStack.clear(); undoCount = 0
         sessionDir.deleteRecursively(); sessionDir.mkdirs()

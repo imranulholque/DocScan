@@ -45,6 +45,7 @@ class Str(
     val retake: String, val retaking: (Int) -> String, val reorderHint: String, val reorderDrop: String,
     val tabSign: String, val sigNew: String, val sigAddTitle: String, val sigCamera: String, val sigGallery: String, val sigAddSub: String, val sigTipsTitle: String, val sigTip1: String, val sigTip2: String, val sigTip3: String, val sigTip4: String, val sigTip5: String, val sigCamHint: String, val sigLibHint: String, val sigEmptyHint: String, val sigPlaced: String, val sigSize: String, val sigAllPages: String, val sigDeleteAsk: String, val sigCropTitle: String, val sigStep1: String, val sigStep2: String, val sigNext: String, val sigFinding: String, val sigCropHint: String, val sigAutoFit: String, val sigRemoveBg: String, val sigStrength: String, val sigStrengthHint: String, val sigUneven: String, val sigUnevenHint: String, val sigBold: String, val sigInk: String, val sigInkOrig: String, val sigInkBlack: String, val sigInkBlue: String, val sigCompare: String, val sigUse: String, val sigMaking: String, val sigCleaning: String, val sigSaved: String, val cropModeCorners: String, val cropModeRect: String, val cropRectHint: String, val camTips: String, val camTipsTitle: String, val camTip1: String, val camTip2: String, val camTip3: String, val camTip4: String, val camTip5: String, val camTip6: String, val gotIt: String, val liveDark: String, val liveDarkSub: String, val liveShadow: String, val liveShadowSub: String, val liveGlare: String, val liveGlareSub: String,
     val fWhiteboard: String, val fWhiten: String, val fNoShadow: String, val fLighten: String, val showingOrig: String, val manualCrop: String, val trimTitle: String, val trimHint: String, val trimReset: String, val extraHint: (String) -> String,
+    val idCard: String, val idCardSub: String, val idFront: String, val idBack: String, val idHint: String, val idSizeTitle: String, val idSizeReal: String, val idSizeLarge: String, val idStart: String, val idMaking: String,
 )
 
 val Bn = Str(
@@ -182,6 +183,10 @@ val Bn = Str(
     trimHint = "কোণার গোল বিন্দু টেনে কোণ মেলান, লাইনের মাঝের চৌকো টেনে সোজা করে ছাঁটুন।",
     trimReset = "রিসেট",
     extraHint = { when (it) { "whiteboard" -> "বোর্ড ও চকচকে নোটের জন্য: ছায়া ও ঝলক ছাড়া সাদা ব্যাকগ্রাউন্ড, মার্কারের রং উজ্জ্বল"; "noshadow" -> "হাত বা ফোনের নরম ছায়া সরিয়ে পাতার আলো সমান করে, রং ঠিক থাকে"; "lighten" -> "ঝাপসা বা অন্ধকার ছবি উজ্জ্বল ও পরিষ্কার করে, রং ঠিক থাকে"; "whiten" -> "শুধু পাতা সাদা হবে, লেখা বা ছবির একটি পিক্সেলও বদলাবে না"; else -> "" } },
+    idCard = "আইডি কার্ড স্ক্যান", idCardSub = "সামনে ও পেছন পরপর তুলুন, এক পাতায় সুন্দর করে সাজিয়ে দেবে",
+    idFront = "১/২  কার্ডের সামনের দিক", idBack = "২/২  কার্ডের পেছনের দিক", idHint = "কার্ডটি সমতল ও গাঢ় রঙের টেবিলে রেখে তুলুন",
+    idSizeTitle = "পাতায় কার্ড কত বড় হবে?", idSizeReal = "আসল মাপ (৮৬ মিমি)", idSizeLarge = "বড় (১২০ মিমি)",
+    idStart = "শুরু করুন", idMaking = "এক পাতায় সাজানো হচ্ছে…",
 )
 
 val En = Str(
@@ -320,6 +325,10 @@ val En = Str(
     trimHint = "Drag a round corner dot to match a corner, drag the square on a line to cut straight.",
     trimReset = "Reset",
     extraHint = { when (it) { "whiteboard" -> "For boards and glossy notes: even white background without shadows, brighter marker colours"; "noshadow" -> "Takes away the soft shadow of a hand or phone and evens the light; colours stay"; "lighten" -> "Lifts a dull or dark photo to a brighter, cleaner page; colours stay"; "whiten" -> "Only the paper turns white; the writing and pictures are not changed at all"; else -> "" } },
+    idCard = "ID card scan", idCardSub = "Take front and back one by one, set neatly on one page",
+    idFront = "1/2  Front of the card", idBack = "2/2  Back of the card", idHint = "Put the card flat on a plain, darker table",
+    idSizeTitle = "Card size on the page", idSizeReal = "Real size (86 mm)", idSizeLarge = "Large (120 mm)",
+    idStart = "Start", idMaking = "Putting both sides on one page…",
 )
 
 val LocalStr = staticCompositionLocalOf { Bn }

@@ -104,6 +104,7 @@ fun CameraScreen(vm: AppVM) {
 
     val leave = {
         vm.cancelRetake()
+        vm.cancelIdCard()
         if (vm.camForSig) { vm.camForSig = false; vm.screen = if (vm.pages.isEmpty()) Screen.Home else Screen.Review }
         else vm.screen = if (vm.pages.any { it.cropped != null }) Screen.Review else Screen.Home
     }
@@ -541,6 +542,16 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                     }
                 }
             }
+            if (vm.idStep > 0) {                                       // ID card: which side is wanted now
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = Color(0xDD0F766E)) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(if (vm.idStep == 1) s.idFront else s.idBack, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text(s.idHint, color = Color(0xCCFFFFFF), fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.weight(1f))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp),
@@ -551,7 +562,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                 }
                 Shutter(pop = flash.value, ready = guide.good, onClick = { shoot() })
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    if (count > 0) {
+                    if (count > 0 && vm.idStep == 0) {
                         Surface(
                             shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { if (vm.retakeId != null) leave() else { vm.current = (count - 1).coerceAtLeast(0); vm.screen = Screen.Review } },

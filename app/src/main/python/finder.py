@@ -1,5 +1,9 @@
 """Fast document finder (OpenCV, vectorised). Candidates -> features -> learned ranker -> edge snapping."""
 import math, numpy as np, cv2
+try:
+    import linefinder                      # 4 straight sides -> exact corners (fast path)
+except Exception:                          # pragma: no cover
+    linefinder = None
 
 S_WORK = 420
 
@@ -248,8 +252,11 @@ def refine(mid, q, rounds=2, band_frac=.03, k=40):
             mx = e.max(1); bi = np.where(e >= .55 * mx[:, None], e, 0).argmax(1)
             # outermost strong local maximum
             pk = (e >= .55 * mx[:, None]) & (np.pad(e, ((0, 0), (1, 1)))[:, :-2] <= e) & (np.pad(e, ((0, 0), (1, 1)))[:, 2:] <= e)
-            has = pk.any(1); last = e.shape[1] - 1 - np.argmax(pk[:, ::-1], 1)
-            bi = np.where(has, last, e.argmax(1))
+            # the strong edge NEAREST to where the side already is (an edge farther out is usually the table, a neighbour paper or a shadow:
+            # the old 'outermost' rule let the crop line slide sideways onto other objects)
+            wgt = 1.0 - .6 * np.abs(ts)[None, :] / band
+            has = pk.any(1)
+            bi = np.where(has, np.where(pk, e * wgt, 0).argmax(1), e.argmax(1))
             hits = p + ts[bi][:, None] * n[None]
             med = np.median(mx); use = mx >= max(4.0, .5 * med)
             pts = hits[use]
@@ -270,7 +277,7 @@ def refine(mid, q, rounds=2, band_frac=.03, k=40):
             r = _line_x(l1[0], l1[0] + l1[1], l2[0], l2[0] + l2[1])
             if r is None or np.hypot(*(r[0] - q[i])) > 2.2 * band + .02 * max(h, w): ok = False; break
             nq[i] = r[0]
-        if not ok or _area(nq) < .6 * _area(q): break
+        if not ok or _area(nq) < .6 * _area(q) or _area(nq) > 1.2 * _area(q): break
         # a side without a line: keep the corners shared with it only when both neighbours moved - otherwise leave
         q = nq; band = max(2.5, band * .45); ts = np.arange(-band, band + .01, .5)
     return q
@@ -281,18 +288,43 @@ WEIGHTS = {"mu": [-1.70653, 0.606, 0.84766, 3.83647, 3.14164, 1.32616, 3.93214, 
 SURE_AGREE = 3          # at least this many other outlines say the same thing -> "sure"
 INSET = 0.0
 
+SUBJECT_MARGIN = 1.0    # a candidate that contains the picture centre may be this much worse (ranker score) than a better one elsewhere
+
+def _contains(q, pt):
+    return cv2.pointPolygonTest(np.asarray(q, np.float32).reshape(-1, 1, 2), (float(pt[0]), float(pt[1])), False) >= 0
+
 def find_page(rgb, lite=False, work=None, mid_side=800):
-    """rgb: HxWx3 uint8 (any size). Returns (quad 4x2 float TL,TR,BR,BL in pixels of rgb, sure: bool)."""
+    """rgb: HxWx3 uint8 (any size). Returns (quad 4x2 float TL,TR,BR,BL in pixels of rgb, sure: bool).
+    1. line finder: 4 real straight edges around the middle of the picture -> exact corners, done (about 30 ms)
+    2. otherwise the colour / learned finder, with the MAIN SUBJECT rule (prefer the outline that holds the picture centre)
+       and, when it agrees with a (not so sure) line quad, the straighter line quad."""
     H, W_ = rgb.shape[:2]
+    lq = None
+    if linefinder is not None:
+        try:
+            lq = linefinder.find_quad(rgb, 360 if lite else linefinder.WORK)
+        except Exception:
+            lq = None
+    if lq is not None and lq[2]:
+        return lq[0].astype(np.float64), True
     work = work or (260 if lite else S_WORK)
     s = work / float(max(H, W_))
     small = cv2.resize(rgb, (max(16, round(W_ * s)), max(16, round(H * s))), interpolation=cv2.INTER_AREA) if s < 1 else rgb
     s = small.shape[1] / float(W_)
     cands, F, Pb = prepare(small, lite)
-    if not cands: return None, False
+    if not cands: return (lq[0].astype(np.float64), False) if lq is not None else (None, False)
     mu = np.array(WEIGHTS['mu'], np.float32); sd = np.array(WEIGHTS['sd'], np.float32); w = np.array(WEIGHTS['w'], np.float32)
     sc = ((F - mu) / sd) @ w
-    k = int(np.argmax(sc)); q = cands[k][1].astype(np.float64)
+    k = int(np.argmax(sc))
+    # main subject: the page is where the camera is aimed. If the winner does not hold the picture centre but another real outline does
+    # (and is not much worse), take that one - the crop must not run off to a neighbour paper, the table edge or a side object.
+    ctr = (small.shape[1] / 2.0, small.shape[0] / 2.0)
+    if not _contains(cands[k][1], ctr):
+        ins = [i for i, (nm, qq) in enumerate(cands) if not nm.startswith('full') and _area(qq) > .06 * small.shape[0] * small.shape[1] and _contains(qq, ctr)]
+        if ins:
+            j = max(ins, key=lambda i: sc[i])
+            if sc[j] >= sc[k] - SUBJECT_MARGIN: k = j
+    q = cands[k][1].astype(np.float64)
     sure = F[k][14] >= math.log1p(SURE_AGREE) and F[k][4] >= math.log1p(2.0)
     if not lite:
         ms = mid_side / float(max(H, W_))
@@ -307,4 +339,7 @@ def find_page(rgb, lite=False, work=None, mid_side=800):
         c = q.mean(0); q = c + (q - c) * (1 - INSET)
     q = q / s
     q[:, 0] = np.clip(q[:, 0], 0, W_ - 1); q[:, 1] = np.clip(q[:, 1], 0, H - 1)
+    # the colour finder and the straight-line finder point at the same page: use the straight-line corners (exact) and call it sure
+    if lq is not None and linefinder.iou(lq[0], q) >= .85:
+        return lq[0].astype(np.float64), True
     return q, bool(sure)

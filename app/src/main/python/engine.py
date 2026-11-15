@@ -143,6 +143,28 @@ def live(rgb, w, h):
     return ",".join("%.4f" % v for x, y in q for v in (x / float(w), y / float(h)))
 
 
+def live_lines(rgb, w, h):
+    """Live camera outline from the 4 straight sides of the page only (linefinder: fast and exact when all 4 corners are in view).
+    Same input / output as live(). Returns '' when no page with 4 real straight sides is seen: the app then uses the Kotlin finder."""
+    if not FAST or finder.linefinder is None:
+        return ""
+    try:
+        try:
+            raw = memoryview(rgb).cast("B").tobytes()
+        except Exception:
+            raw = bytes(rgb)
+        a = np.frombuffer(raw, np.uint8).reshape(int(h), int(w), 3)
+        r = finder.linefinder.find_quad(a, 320)
+    except Exception:
+        return ""
+    if r is None:
+        return ""
+    q, conf, sure = r
+    if not sure and conf < 0.6:
+        return ""
+    return ",".join("%.4f" % v for x, y in q for v in (x / float(w), y / float(h)))
+
+
 def crop(path, quad_csv, dst):
     """Cut the paper out and remove the camera angle (scanner.straighten). Returns 'w,h'."""
     v = [float(x) for x in quad_csv.split(",")]
@@ -161,6 +183,86 @@ def rotate(path, dst, turns):
                            3: Image.Transpose.ROTATE_90}[t])
     _save_jpg(im, dst)
     return "%d,%d" % im.size
+
+
+# ------------------------------------------------------------------ ID card: front + back on ONE page
+ID_RATIO = 85.6 / 53.98          # ISO/IEC 7810 ID-1 (NID, driving licence, bank card): 85.6 x 53.98 mm
+A4_MM = (210.0, 297.0)
+
+
+def _card_fit(im, landscape=None):
+    """A straightened card photo -> trimmed (no background bleed at the rim) and turned to the wanted direction. Its own shape is kept:
+    cards (NID, licence, passport page, student card ...) come in many sizes."""
+    im = im.convert("RGB")
+    w, h = im.size
+    tx, ty = int(round(w * .006)), int(round(h * .006))
+    if w - 2 * tx > 16 and h - 2 * ty > 16:
+        im = im.crop((tx, ty, w - tx, h - ty))
+    w, h = im.size
+    if landscape is not None and (w >= h) != landscape:
+        im = im.transpose(Image.Transpose.ROTATE_90 if landscape else Image.Transpose.ROTATE_270)
+        w, h = im.size
+    return im
+
+
+def _round_paste(page, card, x, y, radius, line):
+    """Card with round corners (like the real card) + a hairline outline, pasted onto the page. Corner mask is drawn 4x for smooth edges."""
+    from PIL import ImageDraw
+    w, h = card.size
+    radius = max(6, int(round(min(w, h) * .06)))               # corner round-ness follows the card's own size
+    k = 4
+    m = Image.new("L", (w * k, h * k), 0)
+    ImageDraw.Draw(m).rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=radius * k, fill=255)
+    m = m.resize((w, h), Image.Resampling.LANCZOS)
+    page.paste(card, (x, y), m)
+    ImageDraw.Draw(page).rounded_rectangle((x, y, x + w - 1, y + h - 1), radius=radius, outline=(176, 176, 176), width=line)
+
+
+def id_card(front, back, dst, size_mm=86.0, dpi=300):
+    """Front and back of an ID card (each already cut out and straightened) -> ONE A4 page, both sides centred, same size,
+    round corners, equal gaps (like a photocopy, but clean). size_mm = length of the card's long side on the paper (any size; it shrinks to fit the page).
+    Landscape cards are stacked top / bottom; portrait cards sit side by side. Returns 'w,h' of the page picture."""
+    pxmm = dpi / 25.4
+    PW, PH = int(round(A4_MM[0] * pxmm)), int(round(A4_MM[1] * pxmm))
+    a = _card_fit(_open(front))
+    landscape = a.size[0] >= a.size[1]
+    b = _card_fit(_open(back), landscape)
+    ra0, rb0 = a.size[0] / float(a.size[1]), b.size[0] / float(b.size[1])
+    if abs(ra0 - rb0) / ra0 < .08:                                  # same card, slightly different crops: both sides get the same shape
+        b = b.resize((b.size[0], int(round(b.size[0] / ra0))), Image.Resampling.LANCZOS)
+    margin = 14.0 * pxmm
+    gap = 12.0 * pxmm
+    long_px = float(size_mm) * pxmm
+
+    def scaled(im, long_side):
+        w, h = im.size
+        k = long_side / float(max(w, h))
+        return im.resize((max(8, int(round(w * k))), max(8, int(round(h * k)))), Image.Resampling.LANCZOS)
+
+    # the biggest the two can be on the page: shrink when the wished size does not fit
+    if landscape:
+        avail_h = PH - 2 * margin - gap
+        ra, rb = a.size[0] / float(a.size[1]), b.size[0] / float(b.size[1])
+        long_px = min(long_px, PW - 2 * margin, avail_h / (1.0 / ra + 1.0 / rb))
+    else:
+        ra, rb = a.size[1] / float(a.size[0]), b.size[1] / float(b.size[0])
+        long_px = min(long_px, PH - 2 * margin, (PW - 2 * margin - gap) / (1.0 / ra + 1.0 / rb))
+    a, b = scaled(a, long_px), scaled(b, long_px)
+    page = Image.new("RGB", (PW, PH), (255, 255, 255))
+    rad = max(6, int(round(3.2 * pxmm * (long_px / (85.6 * pxmm)))))
+    line = max(1, int(round(dpi / 150.0)))
+    if landscape:
+        total = a.size[1] + gap + b.size[1]
+        y0 = int(round((PH - total) / 2.0 - PH * .03))            # optical centre: a touch above the middle
+        _round_paste(page, a, (PW - a.size[0]) // 2, y0, rad, line)
+        _round_paste(page, b, (PW - b.size[0]) // 2, int(round(y0 + a.size[1] + gap)), rad, line)
+    else:
+        total = a.size[0] + gap + b.size[0]
+        x0 = int(round((PW - total) / 2.0))
+        _round_paste(page, a, x0, (PH - a.size[1]) // 2, rad, line)
+        _round_paste(page, b, int(round(x0 + a.size[0] + gap)), (PH - b.size[1]) // 2, rad, line)
+    _save_jpg(page, dst, 95)
+    return "%d,%d" % page.size
 
 
 def fast_ok():

@@ -74,13 +74,32 @@ object Engine {
 
     /** One camera frame (raw RGB, upright, w x h) -> the page outline as fractions 0..1 (TL, TR, BR, BL), or null when no page is seen. */
     suspend fun live(rgb: ByteArray, w: Int, h: Int): List<Offset>? = withContext(finder) {
+        // 1. the 4 straight sides of the page (Python linefinder, exact corners); 2. when that sees no page: the Kotlin colour finder
+        if (linesOk) {
+            try {
+                val r = mod.callAttr("live_lines", rgb, w, h).toString()
+                if (r.isNotEmpty()) {
+                    val v = r.split(",").map { it.toFloat() }
+                    if (v.size == 8) return@withContext List(4) { Offset(v[it * 2], v[it * 2 + 1]) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Throwable) { }
+        }
         try { PageFinder.live(rgb, w, h) } catch (_: Exception) { null }
     }
+
+    private val linesOk by lazy { try { mod.callAttr("fast_ok").toBoolean() } catch (_: Throwable) { false } }
 
     suspend fun crop(path: String, quad: List<Offset>, dst: String): Pair<Int, Int> = py {
         val q = quad.joinToString(",") { "${it.x},${it.y}" }
         size(mod.callAttr("crop", path, q, dst).toString())
     }
+
+    /** Front + back of an ID card (both already cut out and straightened) -> ONE A4 page picture at [dst] (engine.id_card). Returns its size.
+     *  sizeMm = length of the card's long side on the paper (86 = real size). */
+    suspend fun idCard(front: String, back: String, dst: String, sizeMm: Int): Pair<Int, Int> =
+        py { size(mod.callAttr("id_card", front, back, dst, sizeMm.toDouble()).toString()) }
 
     suspend fun rotate(path: String, dst: String, turns: Int) {
         py { mod.callAttr("rotate", path, dst, turns) }

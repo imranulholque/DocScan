@@ -25,13 +25,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +64,24 @@ fun HomeScreen(vm: AppVM) {
     }
     val cs = MaterialTheme.colorScheme
     val ready = vm.pages.count { it.cropped != null }
+    var askId by remember { mutableStateOf(false) }
+
+    if (askId) {                                                   // ID card: how big on the page, then start with the front
+        AlertDialog(
+            onDismissRequest = { askId = false },
+            title = { Text(s.idCard, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(s.idSizeTitle, fontSize = 14.sp, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text("${vm.idSize} mm", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = cs.primary)
+                    Slider(value = vm.idSize.toFloat(), onValueChange = { vm.chooseIdSize(it.toInt()) }, valueRange = 50f..190f)
+                }
+            },
+            confirmButton = { Button(onClick = { askId = false; vm.startIdCard() }) { Text(s.idStart, fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { askId = false }) { Text(s.cancel) } },
+        )
+    }
 
     Column(
         Modifier.fillMaxSize().background(cs.background).systemBarsPadding()
@@ -97,6 +122,8 @@ fun HomeScreen(vm: AppVM) {
             title = s.scan, sub = s.scanSub, primary = true,
             onClick = { vm.screen = Screen.Camera },
         )
+        Spacer(Modifier.height(12.dp))
+        BigAction(title = s.idCard, sub = s.idCardSub, primary = false, onClick = { askId = true })
         Spacer(Modifier.height(12.dp))
         BigAction(
             title = s.gallery, sub = s.gallerySub, primary = false,
