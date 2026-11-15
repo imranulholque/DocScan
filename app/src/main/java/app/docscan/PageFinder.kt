@@ -5,8 +5,11 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.geometry.Offset
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -76,13 +79,12 @@ object PageFinder {
         return th
     }
 
-    /** The biggest 4-connected blob of the mask: (its pixels, how many). */
-    private fun bigBlob(mask: BooleanArray, w: Int, h: Int): Pair<BooleanArray, Int>? {
+    /** The [k] biggest 4-connected blobs of the mask, biggest first: (their pixels, how many). */
+    private fun bigBlobs(mask: BooleanArray, w: Int, h: Int, k: Int): List<Pair<BooleanArray, Int>> {
         val total = w * h
         val seen = BooleanArray(total)
         val st = IntArray(total)
-        var bestStart = -1
-        var bestN = 0
+        val comps = ArrayList<IntArray>()   // (start pixel, size)
         for (s in 0 until total) {
             if (!mask[s] || seen[s]) continue
             var sp = 0
@@ -98,22 +100,27 @@ object PageFinder {
                 if (y > 0 && mask[p - w] && !seen[p - w]) { seen[p - w] = true; st[sp++] = p - w }
                 if (y < h - 1 && mask[p + w] && !seen[p + w]) { seen[p + w] = true; st[sp++] = p + w }
             }
-            if (n > bestN) { bestN = n; bestStart = s }
+            comps.add(intArrayOf(s, n))
         }
-        if (bestStart < 0) return null
-        val lab = BooleanArray(total)
-        var sp = 0
-        st[sp++] = bestStart; lab[bestStart] = true
-        while (sp > 0) {
-            val p = st[--sp]
-            val x = p % w
-            val y = (p - x) / w
-            if (x > 0 && mask[p - 1] && !lab[p - 1]) { lab[p - 1] = true; st[sp++] = p - 1 }
-            if (x < w - 1 && mask[p + 1] && !lab[p + 1]) { lab[p + 1] = true; st[sp++] = p + 1 }
-            if (y > 0 && mask[p - w] && !lab[p - w]) { lab[p - w] = true; st[sp++] = p - w }
-            if (y < h - 1 && mask[p + w] && !lab[p + w]) { lab[p + w] = true; st[sp++] = p + w }
+        comps.sortByDescending { it[1] }
+        val out = ArrayList<Pair<BooleanArray, Int>>()
+        for (ci in 0 until min(k, comps.size)) {
+            val lab = BooleanArray(total)
+            var sp = 0
+            val s0 = comps[ci][0]
+            st[sp++] = s0; lab[s0] = true
+            while (sp > 0) {
+                val p = st[--sp]
+                val x = p % w
+                val y = (p - x) / w
+                if (x > 0 && mask[p - 1] && !lab[p - 1]) { lab[p - 1] = true; st[sp++] = p - 1 }
+                if (x < w - 1 && mask[p + 1] && !lab[p + 1]) { lab[p + 1] = true; st[sp++] = p + 1 }
+                if (y > 0 && mask[p - w] && !lab[p - w]) { lab[p - w] = true; st[sp++] = p - w }
+                if (y < h - 1 && mask[p + w] && !lab[p + w]) { lab[p + w] = true; st[sp++] = p + w }
+            }
+            out.add(lab to comps[ci][1])
         }
-        return lab to bestN
+        return out
     }
 
     private fun polyArea(q: List<Pt>): Double {
@@ -316,6 +323,58 @@ object PageFinder {
         return BooleanArray(n) { d[it] > thr }
     }
 
+    // ------------------------------------------------------------------ learned ranking
+    /**
+     * Candidate ranking learned from the collected crops (learned_data.json: 54 pages, their final corrected corners).
+     * A listwise softmax model: for every picture the candidate whose outline matched the corrected crop best should score highest.
+     * Features: ln(side contrast + 1), ln(area fraction), ln(centredness), ln(fill), corners touching the picture border,
+     * worst corner squareness (max |cos|), blob rank (0 = biggest), ln(inside / outside colour distance + 1).
+     * Leave-one-out on the collected pages: mean overlap 0.777 -> 0.82 (see tools/ in the repository).
+     */
+    private val RANK_W = doubleArrayOf(0.942, 1.911, 0.563, 0.133, -0.466, -0.608, 0.022, -0.421)
+
+    private fun learnedScore(q: List<Pt>, w: Int, h: Int, con: Double, frac: Double, centre: Double, fill: Double, blobRank: Int, chd: Double): Double {
+        var touch = 0
+        for (p in q) if (p.x < 2 || p.y < 2 || p.x > w - 3 || p.y > h - 3) touch++
+        var orth = 0.0
+        for (i in 0 until 4) {
+            val o = q[i]; val a = q[(i + 3) % 4]; val b = q[(i + 1) % 4]
+            val ax = a.x - o.x; val ay = a.y - o.y; val bx = b.x - o.x; val by = b.y - o.y
+            val c = abs(ax * bx + ay * by) / (hypot(ax, ay) * hypot(bx, by) + 1e-9)
+            if (c > orth) orth = c
+        }
+        return RANK_W[0] * ln(con + 1.0) + RANK_W[1] * ln(frac) + RANK_W[2] * ln(centre) +
+            RANK_W[3] * ln(min(1.0, fill) + 1e-3) + RANK_W[4] * touch + RANK_W[5] * orth +
+            RANK_W[6] * blobRank + RANK_W[7] * ln(chd + 1.0)
+    }
+
+    /** Colour distance between the mean colour inside the 4-gon and the mean colour outside it (a real page differs from its table). */
+    private fun insideOutsideColour(pic: Pic, q: List<Pt>, totR: Double, totG: Double, totB: Double): Double {
+        val w = pic.w; val h = pic.h
+        val x0 = max(0, floor(q.minOf { it.x }).toInt()); val x1 = min(w - 1, ceil(q.maxOf { it.x }).toInt())
+        val y0 = max(0, floor(q.minOf { it.y }).toInt()); val y1 = min(h - 1, ceil(q.maxOf { it.y }).toInt())
+        var sr = 0.0; var sg = 0.0; var sb = 0.0; var cnt = 0
+        for (y in y0..y1) for (x in x0..x1) {
+            var pos = 0; var neg = 0
+            for (i in 0 until 4) {
+                val a = q[i]; val b = q[(i + 1) % 4]
+                val cr = (b.x - a.x) * (y + 0.5 - a.y) - (b.y - a.y) * (x + 0.5 - a.x)
+                if (cr >= 0) pos++ else neg++
+            }
+            if (pos == 4 || neg == 4) {
+                val i = y * w + x
+                sr += pic.r[i]; sg += pic.g[i]; sb += pic.b[i]; cnt++
+            }
+        }
+        val total = w * h
+        if (cnt == 0 || cnt >= total) return 0.0
+        val out = (total - cnt).toDouble()
+        val dr = sr / cnt - (totR - sr) / out
+        val dg = sg / cnt - (totG - sg) / out
+        val db = sb / cnt - (totB - sb) / out
+        return sqrt(dr * dr + dg * dg + db * db)
+    }
+
     // ------------------------------------------------------------------ coarse finder
     private fun coarseCands(pic: Pic): List<Cand> {
         val w = pic.w; val h = pic.h; val n = w * h
@@ -365,41 +424,51 @@ object PageFinder {
         masks.add(BooleanArray(n) { u1[it] > t1 } to 3)
         masks.add(BooleanArray(n) { u4[it] < t4 } to 3)
         masks.add(BooleanArray(n) { u4[it] < t4 * 0.6 } to 3)
+        // learned from the collected crops: wider / tighter variants find ID cards, passport photos and screenshots the first five miss
+        masks.add(BooleanArray(n) { u2[it] > t2 * 0.5 } to 3)
+        masks.add(BooleanArray(n) { u2[it] > t2 * 1.4 } to 3)
+        masks.add(BooleanArray(n) { u4[it] < t4 * 1.4 } to 3)
         noiseMask(pic)?.let { masks.add(it to 1) }          // small objects: light cleaning so they survive
+        var totR = 0.0; var totG = 0.0; var totB = 0.0
+        for (i in 0 until n) { totR += pic.r[i]; totG += pic.g[i]; totB += pic.b[i] }
         val cands = ArrayList<Cand>()
         for ((mk, rad) in masks) {
             var a = blurF(FloatArray(n) { if (mk[it]) 1f else 0f }, w, h, rad)
             val c1 = BooleanArray(n) { a[it] > 0.4f }
             a = blurF(FloatArray(n) { if (c1[it]) 1f else 0f }, w, h, rad)
             val c2 = BooleanArray(n) { a[it] > 0.6f }
-            val blob = bigBlob(c2, w, h) ?: continue
-            val filledBlob = fillHoles(blob.first, w, h)
-            val lab = filledBlob.first
-            val cnt2 = filledBlob.second
-            val frac = cnt2.toDouble() / n
-            if (cnt2 < 30 || frac < 0.0015 || frac > 0.985) continue
-            val pts = ArrayList<Pt>()
-            var cx = 0.0; var cy = 0.0
-            for (y in 0 until h) for (x in 0 until w) {
-                val p = y * w + x
-                if (!lab[p]) continue
-                cx += x; cy += y
-                val edge = x == 0 || y == 0 || x == w - 1 || y == h - 1 || !lab[p - 1] || !lab[p + 1] || !lab[p - w] || !lab[p + w]
-                if (edge) pts.add(Pt(x + 0.5, y + 0.5))
+            // the two biggest blobs: the page is not always the biggest one (a hand, a table patch)
+            val blobs = bigBlobs(c2, w, h, 2)
+            for ((bi, blob) in blobs.withIndex()) {
+                val filledBlob = fillHoles(blob.first, w, h)
+                val lab = filledBlob.first
+                val cnt2 = filledBlob.second
+                val frac = cnt2.toDouble() / n
+                if (cnt2 < 30 || frac < 0.0015 || frac > 0.985) continue
+                val pts = ArrayList<Pt>()
+                var cx = 0.0; var cy = 0.0
+                for (y in 0 until h) for (x in 0 until w) {
+                    val p = y * w + x
+                    if (!lab[p]) continue
+                    cx += x; cy += y
+                    val edge = x == 0 || y == 0 || x == w - 1 || y == h - 1 || !lab[p - 1] || !lab[p + 1] || !lab[p - w] || !lab[p + w]
+                    if (edge) pts.add(Pt(x + 0.5, y + 0.5))
+                }
+                if (pts.size < 8) continue
+                val hull = hullOf(pts)
+                if (hull.size < 4) continue
+                val qh = quadFromHull(hull)
+                if (qh.size != 4) continue
+                val q = orderQuad(qh)
+                val area = max(1.0, polyArea(q))
+                val fill = cnt2 / area
+                cx /= cnt2; cy /= cnt2
+                if (fill < 0.7 || fill > 1.25) continue
+                val centre = 1 - 0.5 * hypot(cx - w / 2.0, cy - h / 2.0) / hypot(w / 2.0, h / 2.0)
+                val con = sideContrast(chb, w, h, q)
+                val chd = insideOutsideColour(pic, q, totR, totG, totB)
+                cands.add(Cand(q, fill, frac, learnedScore(q, w, h, con, frac, centre, fill, bi, chd), con))
             }
-            if (pts.size < 8) continue
-            val hull = hullOf(pts)
-            if (hull.size < 4) continue
-            val qh = quadFromHull(hull)
-            if (qh.size != 4) continue
-            val q = orderQuad(qh)
-            val area = max(1.0, polyArea(q))
-            val fill = cnt2 / area
-            cx /= cnt2; cy /= cnt2
-            if (fill < 0.7 || fill > 1.25) continue
-            val centre = 1 - 0.5 * hypot(cx - w / 2.0, cy - h / 2.0) / hypot(w / 2.0, h / 2.0)
-            val con = sideContrast(chb, w, h, q)
-            cands.add(Cand(q, fill, frac, con * sqrt(frac) * sqrt(centre) * min(1.0, fill), con))
         }
         return cands
     }
