@@ -14,7 +14,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -96,7 +95,7 @@ fun CropScreen(vm: AppVM) {
     key(page.id) { CropBody(vm, page) }
 }
 
-private fun fullFrame(w: Int, h: Int): List<Offset> {
+fun fullFrame(w: Int, h: Int): List<Offset> {
     val mx = w * 0.01f; val my = h * 0.01f
     return listOf(Offset(mx, my), Offset(w - mx, my), Offset(w - mx, h - my), Offset(mx, h - my))
 }
@@ -124,8 +123,6 @@ private fun CropBody(vm: AppVM, page: Page) {
     var manual by remember { mutableStateOf(false) }               // auto crop is switched off: the person places the corners
     var active by remember { mutableIntStateOf(-1) }
     val drag = remember { DragState() }
-    var rectMode by remember { mutableStateOf(false) }            // false = four corners (fixes the camera angle), true = a straight rectangle
-    val rect = remember { RectBox() }
 
     // animations: a scanning light while the page is being searched, corners that glide to the page, a pulse when found
     // One frame clock drives every looping effect below. It is read only inside the Canvas draw block, so the screen is never
@@ -208,15 +205,10 @@ private fun CropBody(vm: AppVM, page: Page) {
             shape = RoundedCornerShape(14.dp), color = bannerColor,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 58.dp).graphicsLayer { alpha = bannerAlpha },
         ) {
-            FadeSwap(sure to rectMode, 200) { (st, rm) ->
+            FadeSwap(sure, 200) { st ->
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp).heightIn(min = 38.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        when {
-                            st == null -> ""
-                            rm -> s.cropRectHint
-                            st -> s.cropFound
-                            else -> if (manual) s.cropManual else s.cropCheck
-                        },
+                        when (st) { null -> ""; true -> s.cropFound; false -> if (manual) s.cropManual else s.cropCheck },
                         color = Color.White, fontSize = 13.sp,
                     )
                 }
@@ -238,9 +230,7 @@ private fun CropBody(vm: AppVM, page: Page) {
             fun toScreen(p: Offset) = Offset(ox + p.x * scale, oy + p.y * scale)
             fun mid(i: Int) = (quad[i] + quad[(i + 1) % 4]) / 2f
 
-            if (rectMode) {
-                RectCropper(bmp, page.w, page.h, rect, Modifier.fillMaxSize(), onTouch = { touched = true })
-            } else Canvas(
+            Canvas(
                 Modifier.fillMaxSize().pointerInput(page.id, scale) {
                     detectDragGestures(
                         onDragStart = { pos ->
@@ -408,41 +398,24 @@ private fun CropBody(vm: AppVM, page: Page) {
             }
         }
 
-        // how to cut: four corners (fixes the camera angle, like auto crop) or a straight rectangle
-        val canSwitch = sure != null || manual
         Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CropModeChip(s.cropModeCorners, !rectMode, canSwitch, false, Modifier.weight(1f)) {
-                if (rectMode) {
-                    quad.clear(); quad.addAll(rect.corners()); touched = true; rectMode = false
-                }
-            }
-            CropModeChip(s.cropModeRect, rectMode, canSwitch, true, Modifier.weight(1f)) {
-                if (!rectMode && quad.size == 4) { rect.fromPoints(quad.toList(), page.w, page.h); rectMode = true }
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedButton(
-                onClick = { touched = false; manual = false; rectMode = false; scope.launch { runDetect() } },
+                onClick = { touched = false; manual = false; scope.launch { runDetect() } },
                 enabled = sure != null,
             ) { Text(s.auto, color = Color.White) }
             OutlinedButton(onClick = {
                 touched = true
                 quad.clear(); quad.addAll(fullFrame(page.w, page.h))
-                rect.fromPoints(quad.toList(), page.w, page.h)
             }) { Text(s.whole, color = Color.White) }
             Button(
                 onClick = {
                     scope.launch {
                         vm.busy = s.working
                         try {
-                            val q = if (rectMode) rect.corners() else quad.toList()
-                            vm.applyCrop(page.id, q)
+                            vm.applyCrop(page.id, quad.toList())
                             vm.nextCrop()
                         } catch (e: Exception) {
                             vm.toast(s.errPrefix + (e.message ?: ""))
@@ -452,36 +425,6 @@ private fun CropBody(vm: AppVM, page: Page) {
                 enabled = quad.size == 4 && sure != null,
                 modifier = Modifier.weight(1f).height(50.dp),
             ) { Text(s.cropApply, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-        }
-    }
-}
-
-/** A switch between the two ways to cut (with a small picture of each). */
-@Composable
-private fun CropModeChip(label: String, selected: Boolean, enabled: Boolean, rectIcon: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val bg = animateColorAlways(if (selected) Color(0xFF4F46E5) else Color(0xFF1F2430), 220)
-    val fg = if (enabled) Color.White else Color(0x66FFFFFF)
-    Surface(
-        modifier = modifier.clickable(enabled = enabled, onClick = onClick), shape = RoundedCornerShape(14.dp), color = bg,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color(0xFF8B93FF) else Color(0xFF353B4D)),
-    ) {
-        Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Canvas(Modifier.size(20.dp)) {
-                val w = this.size.width; val h = this.size.height
-                val st = Stroke(width = w * 0.09f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-                if (rectIcon) {
-                    drawRoundRect(fg, Offset(w * 0.14f, h * 0.22f), Size(w * 0.72f, h * 0.56f), androidx.compose.ui.geometry.CornerRadius(w * 0.06f, w * 0.06f), style = st)
-                } else {
-                    val q = Path().apply {
-                        moveTo(w * 0.22f, h * 0.14f); lineTo(w * 0.86f, h * 0.26f); lineTo(w * 0.76f, h * 0.86f); lineTo(w * 0.12f, h * 0.72f); close()
-                    }
-                    drawPath(q, fg, style = st)
-                    for (p in listOf(Offset(0.22f, 0.14f), Offset(0.86f, 0.26f), Offset(0.76f, 0.86f), Offset(0.12f, 0.72f)))
-                        drawCircle(fg, w * 0.09f, Offset(p.x * w, p.y * h))
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(label, color = fg, fontSize = 14.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
         }
     }
 }

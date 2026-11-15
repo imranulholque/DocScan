@@ -44,6 +44,7 @@ class Str(
     val liveAlmost: String, val liveAlmostSub: String,
     val retake: String, val retaking: (Int) -> String, val reorderHint: String, val reorderDrop: String,
     val tabSign: String, val sigNew: String, val sigAddTitle: String, val sigCamera: String, val sigGallery: String, val sigAddSub: String, val sigTipsTitle: String, val sigTip1: String, val sigTip2: String, val sigTip3: String, val sigTip4: String, val sigTip5: String, val sigCamHint: String, val sigLibHint: String, val sigEmptyHint: String, val sigPlaced: String, val sigSize: String, val sigAllPages: String, val sigDeleteAsk: String, val sigCropTitle: String, val sigStep1: String, val sigStep2: String, val sigNext: String, val sigFinding: String, val sigCropHint: String, val sigAutoFit: String, val sigRemoveBg: String, val sigStrength: String, val sigStrengthHint: String, val sigUneven: String, val sigUnevenHint: String, val sigBold: String, val sigInk: String, val sigInkOrig: String, val sigInkBlack: String, val sigInkBlue: String, val sigCompare: String, val sigUse: String, val sigMaking: String, val sigCleaning: String, val sigSaved: String, val cropModeCorners: String, val cropModeRect: String, val cropRectHint: String, val camTips: String, val camTipsTitle: String, val camTip1: String, val camTip2: String, val camTip3: String, val camTip4: String, val camTip5: String, val camTip6: String, val gotIt: String, val liveDark: String, val liveDarkSub: String, val liveShadow: String, val liveShadowSub: String, val liveGlare: String, val liveGlareSub: String,
+    val fWhiteboard: String, val fSaver: String, val fRestore: String, val fHand: String, val fBold: String, val fNight: String, val manualCrop: String, val trimTitle: String, val trimHint: String, val trimReset: String, val extraHint: (String) -> String,
 )
 
 val Bn = Str(
@@ -172,6 +173,17 @@ val Bn = Str(
     liveShadowSub = "হাত বা ফোনের ছায়া সরান, যাতে পুরো কাগজে সমান আলো পড়ে",
     liveGlare = "ঝলক দেখা যাচ্ছে",
     liveGlareSub = "ফোন সামান্য সরিয়ে বা কাগজ ঘুরিয়ে ঝলক এড়ান",
+    fWhiteboard = "হোয়াইটবোর্ড",
+    fSaver = "কালি সাশ্রয়",
+    fRestore = "পুরোনো কাগজ",
+    fHand = "হাতের লেখা",
+    fBold = "মোটা লেখা",
+    fNight = "ডার্ক মোড",
+    manualCrop = "ম্যানুয়াল ক্রপ",
+    trimTitle = "পাতা ছাঁটুন",
+    trimHint = "কোণার গোল বিন্দু টেনে কোণ মেলান, লাইনের মাঝের চৌকো টেনে সোজা করে ছাঁটুন।",
+    trimReset = "রিসেট",
+    extraHint = { when (it) { "whiteboard" -> "বোর্ড ও চকচকে নোটের জন্য: ব্যাকগ্রাউন্ড ধবধবে সাদা, মার্কারের রং উজ্জ্বল"; "saver" -> "লেখা হালকা কালো, ব্যাকগ্রাউন্ড সাদা: প্রিন্টে কম কালি লাগে"; "restore" -> "পুরোনো, ফ্যাকাসে বা হলদে কাগজের জন্য: ঝাপসা লেখা ফিরে আসে, কাগজ সাদা হয়"; "hand" -> "পেনসিল ও কলমের নোটের জন্য: সরু ও হালকা দাগ গাঢ় ও স্পষ্ট হয়"; "bold" -> "সরু বা ভাঙা ছাপা ও ফটোকপির জন্য: লেখা মোটা ও গাঢ় কালো হয়"; "night" -> "কালো পাতায় সাদা লেখা: রাতে পড়তে চোখের আরাম"; else -> "" } },
 )
 
 val En = Str(
@@ -301,6 +313,17 @@ val En = Str(
     liveShadowSub = "Move your hand or the phone's shadow away so the light is even",
     liveGlare = "Glare on the paper",
     liveGlareSub = "Shift the phone or turn the paper a little to avoid the reflection",
+    fWhiteboard = "Whiteboard",
+    fSaver = "Ink saver",
+    fRestore = "Restore",
+    fHand = "Handwriting",
+    fBold = "Bold text",
+    fNight = "Dark mode",
+    manualCrop = "Manual crop",
+    trimTitle = "Trim the page",
+    trimHint = "Drag a round corner dot to match a corner, drag the square on a line to cut straight.",
+    trimReset = "Reset",
+    extraHint = { when (it) { "whiteboard" -> "For boards and glossy notes: pure white background, bright marker colours"; "saver" -> "Lighter text on white, so it prints with less ink"; "restore" -> "For old, faded or yellowed papers: weak text comes back and the paper turns white"; "hand" -> "For pencil and pen notes: thin, light strokes become dark and clear"; "bold" -> "For thin or broken print and photocopies: thicker, solid black text"; "night" -> "White text on a dark page, easy on the eyes when reading at night"; else -> "" } },
 )
 
 val LocalStr = staticCompositionLocalOf { Bn }

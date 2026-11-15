@@ -178,27 +178,21 @@ fun RectCropper(
             }
         }
         drawRect(accent, Offset(L, T), Size(R - L, B - T), style = Stroke(width = sw))
-        // thick corner brackets
-        val bl = min(28.dp.toPx(), min(R - L, B - T) * 0.4f)
-        val bw = sw * 2.2f
-        val cs = listOf(Offset(L, T) to (1f to 1f), Offset(R, T) to (-1f to 1f), Offset(R, B) to (-1f to -1f), Offset(L, B) to (1f to -1f))
-        for ((i, c) in cs.withIndex()) {
-            val (p0, dd) = c
-            val k = if (active == i) 1.25f else 1f
-            drawLine(Color.White, p0, Offset(p0.x + dd.first * bl * k, p0.y), strokeWidth = bw, cap = StrokeCap.Round)
-            drawLine(Color.White, p0, Offset(p0.x, p0.y + dd.second * bl * k), strokeWidth = bw, cap = StrokeCap.Round)
+        // round dots on the corners (match a corner), small squares on the sides (cut straight)
+        val ind = Color(0xFF4F46E5)
+        val cr = 11.dp.toPx(); val sq = 8.dp.toPx()
+        val pts = listOf(Offset(L, T), Offset(R, T), Offset(R, B), Offset(L, B))
+        val mids = listOf(Offset((L + R) / 2f, T), Offset(R, (T + B) / 2f), Offset((L + R) / 2f, B), Offset(L, (T + B) / 2f))
+        for (k in 0 until 4) {
+            val m = mids[k]; val r = if (active == 4 + k) sq * 1.5f else sq
+            drawRect(Color.White, Offset(m.x - r, m.y - r), Size(2 * r, 2 * r))
+            drawRect(ind, Offset(m.x - r, m.y - r), Size(2 * r, 2 * r), style = Stroke(width = sw * 0.8f))
         }
-        // side handles: small pills
-        val pl = min(22.dp.toPx(), min(R - L, B - T) * 0.25f)
-        val pt = 5.dp.toPx()
-        val mx = (L + R) / 2f; val my = (T + B) / 2f
-        fun pill(c: Offset, horizontal: Boolean, on: Boolean) {
-            val k = if (on) 1.3f else 1f
-            val w = (if (horizontal) pl else pt) * k; val h = (if (horizontal) pt else pl) * k
-            drawRoundRect(Color.White, Offset(c.x - w, c.y - h), Size(2 * w, 2 * h), CornerRadius(pt, pt))
+        for (i in 0 until 4) {
+            val r = if (active == i) cr * 1.5f else cr
+            drawCircle(Color.White, r, pts[i])
+            drawCircle(ind, r, pts[i], style = Stroke(width = sw))
         }
-        pill(Offset(mx, T), true, active == 4); pill(Offset(R, my), false, active == 5)
-        pill(Offset(mx, B), true, active == 6); pill(Offset(L, my), false, active == 7)
         val f = focus
         if (f != null && bmp != null && (active in 0..7 || active == 9)) {
             drawLoupe(bmp, iw, f, Offset(ox + f.x * sc, oy + f.y * sc), sc, size, accent)

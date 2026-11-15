@@ -28,7 +28,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-enum class Screen { Home, Camera, Crop, Review, Settings, Sign }
+enum class Screen { Home, Camera, Crop, Review, Settings, Sign, Trim }
 
 data class Page(
     val id: String,
@@ -452,6 +452,35 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         undoStack.clear(); undoCount = 0
         sessionDir.deleteRecursively(); sessionDir.mkdirs()
         screen = Screen.Home
+    }
+
+    // ------------------------------------------------------------ manual crop of the finished page (edit screen)
+    /** The page that is being trimmed on the Trim screen. */
+    var trimId by mutableStateOf<String?>(null)
+
+    /** Opens the manual crop on the straightened page. A turn done on the review screen is made real first, so the crop sees the page as it is shown. */
+    suspend fun openTrim(id: String) {
+        val p = page(id) ?: return
+        val c = p.cropped ?: return
+        if (p.rot % 4 != 0) {
+            val dst = file(id, "crop")
+            Engine.rotate(c, dst, p.rot)
+            del(c); del(p.prev)
+            val odd = p.rot % 2 == 1
+            upd(id) { it.copy(cropped = dst, rot = 0, prev = null, prevKey = "", prevSide = 0, thumbs = null, cw = if (odd) it.ch else it.cw, ch = if (odd) it.cw else it.ch) }
+        }
+        trimId = id
+        screen = Screen.Trim
+    }
+
+    /** Cuts the finished page again: [quad] (4 corners, picture pixels of the straightened page) is straightened into the new page. */
+    suspend fun applyTrim(id: String, quad: List<Offset>) {
+        val p = page(id) ?: return
+        val src = p.cropped ?: return
+        val dst = file(id, "crop")
+        val (cw, ch) = Engine.crop(src, quad, dst)
+        del(src); del(p.prev)
+        upd(id) { it.copy(cropped = dst, prev = null, prevKey = "", prevSide = 0, thumbs = null, cw = cw, ch = ch) }
     }
 
     // ------------------------------------------------------------ signatures

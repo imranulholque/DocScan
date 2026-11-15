@@ -295,6 +295,7 @@ fun ReviewScreen(vm: AppVM) {
                     Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         ActionBtn(s.rotate, onClick = { scope.launch { vm.rotate(cur.id) } }) { c -> Icon(Icons.Filled.Refresh, s.rotate, tint = c, modifier = Modifier.size(22.dp)) }
                         ActionBtn(s.recrop, onClick = { vm.recrop(cur.id) }) { c -> Icon(Icons.Filled.Edit, s.recrop, tint = c, modifier = Modifier.size(22.dp)) }
+                        ActionBtn(s.manualCrop, onClick = { scope.launch { vm.busy = s.working; try { vm.openTrim(cur.id) } finally { vm.busy = null } } }) { c -> CropGlyph(c) }
                         ActionBtn(s.retake, onClick = { vm.startRetake(cur.id) }) { c -> CameraGlyph(c) }
                         ActionBtn(s.add, onClick = { vm.screen = Screen.Camera }) { c -> Icon(Icons.Filled.Add, s.add, tint = c, modifier = Modifier.size(22.dp)) }
                         ActionBtn(s.delete, tint = cs.error, onClick = { askDelete = true }) { c -> Icon(Icons.Filled.Delete, s.delete, tint = c, modifier = Modifier.size(22.dp)) }
@@ -357,6 +358,17 @@ fun ReviewScreen(vm: AppVM) {
     }
 }
 
+/** A crop symbol: two corner brackets that overlap. */
+@Composable
+private fun CropGlyph(color: Color) {
+    Canvas(Modifier.size(22.dp)) {
+        val w = size.width
+        val st = Stroke(width = w * 0.1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        drawPath(Path().apply { moveTo(w * 0.28f, w * 0.06f); lineTo(w * 0.28f, w * 0.72f); lineTo(w * 0.94f, w * 0.72f) }, color, style = st)
+        drawPath(Path().apply { moveTo(w * 0.06f, w * 0.28f); lineTo(w * 0.72f, w * 0.28f); lineTo(w * 0.72f, w * 0.94f) }, color, style = st)
+    }
+}
+
 /** Four tabs with a coloured pill that slides from one tab to the next. */
 @Composable
 private fun ReviewTabs(selected: Int, onPick: (Int) -> Unit) {
@@ -392,12 +404,14 @@ private fun ReviewTabs(selected: Int, onPick: (Int) -> Unit) {
 private fun EffectControls(vm: AppVM, cur: Page) {
     val s = LocalStr.current
     val cs = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        LookTile(cur, "orig", s.fOrig, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "orig") }
-        LookTile(cur, "color", s.fColor, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "color") }
-        LookTile(cur, "vivid", s.fVivid, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "vivid") }
-        LookTile(cur, "gray", s.fGray, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "gray") }
-        LookTile(cur, "bw", s.fBw, Modifier.weight(1f)) { vm.setLook(cur.id, mode = "bw") }
+    // all the looks in one row that scrolls sideways (the first five are the classics, the rest are made for one purpose each)
+    val looks = listOf(
+        "orig" to s.fOrig, "color" to s.fColor, "vivid" to s.fVivid, "gray" to s.fGray, "bw" to s.fBw,
+        "whiteboard" to s.fWhiteboard, "saver" to s.fSaver, "restore" to s.fRestore, "hand" to s.fHand, "bold" to s.fBold, "night" to s.fNight,
+    )
+    val rowScroll = rememberScrollState()
+    Row(Modifier.fillMaxWidth().horizontalScroll(rowScroll), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for ((m, label) in looks) key(m) { LookTile(cur, m, label, Modifier.width(66.dp)) { vm.setLook(cur.id, mode = m) } }
     }
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(if (cur.mode == "orig") s.clarity else s.strength, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
@@ -405,7 +419,11 @@ private fun EffectControls(vm: AppVM, cur: Page) {
     }
     FancySlider(cur.eff.toFloat(), { vm.setLook(cur.id, clarity = it.roundToInt()) }, range = 0f..100f)
     Text(
-        when (cur.mode) { "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint; else -> s.clarityHint },
+        when (cur.mode) {
+            "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint
+            "whiteboard", "saver", "restore", "hand", "bold", "night" -> s.extraHint(cur.mode)
+            else -> s.clarityHint
+        },
         fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, maxLines = 2,
     )
     // text clarity: its own slider for every look except "Original" (there the slider above already is the text clarity)
@@ -820,11 +838,11 @@ private fun ActionBtn(label: String, enabled: Boolean = true, tint: Color = Colo
     val cs = MaterialTheme.colorScheme
     val c = if (!enabled) cs.outline else if (tint != Color.Unspecified) tint else cs.onSurfaceVariant
     Column(
-        Modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
+        Modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 4.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         icon(c)
-        Text(label, fontSize = 11.sp, color = c, maxLines = 1)
+        Text(label, fontSize = 10.5.sp, color = c, maxLines = 1)
     }
 }
 
