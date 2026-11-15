@@ -1,6 +1,6 @@
 # DocScanner
 
-*Made by **Imranul Hoque Sabbir** (ইমরানুল হক সাব্বির).*
+*Made by **Imranul Hoque Sabbir** (ইমরানুল হক সাব্বির)..*
 
 Standalone Android app: scan one or many pages with the phone camera, crop (auto page finder + draggable corners and sides),
 make the text clear with ONE slider, and save as PDF / JPG / PNG to any folder or share straight to WhatsApp and other apps.
