@@ -1,5 +1,7 @@
 package app.docscan
 
+import androidx.compose.foundation.gestures.detectTransformGestures
+
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
@@ -168,6 +170,37 @@ private fun polyArea(q: List<Offset>): Float {
     return abs(a) / 2f
 }
 
+/** A tiny fingerprint of a camera frame (12 x 12 brightness cells, overall brightness removed). Tells if the phone moved since the page was locked. */
+private fun frameSig(rgb: ByteArray, w: Int, h: Int): IntArray {
+    val out = IntArray(144)
+    var sum = 0
+    for (cy in 0 until 12) for (cx in 0 until 12) {
+        val x = (((cx + 0.5f) / 12f) * w).toInt().coerceIn(1, w - 2)
+        val y = (((cy + 0.5f) / 12f) * h).toInt().coerceIn(1, h - 2)
+        var a = 0
+        for (dy in -1..1) for (dx in -1..1) {
+            val o = ((y + dy) * w + x + dx) * 3
+            a += ((rgb[o].toInt() and 255) * 77 + (rgb[o + 1].toInt() and 255) * 150 + (rgb[o + 2].toInt() and 255) * 29) shr 8
+        }
+        out[cy * 12 + cx] = a / 9
+        sum += a / 9
+    }
+    val m = sum / 144
+    for (i in 0 until 144) out[i] -= m
+    return out
+}
+
+private fun sigDiff(a: IntArray, b: IntArray): Float {
+    var s = 0
+    for (i in a.indices) s += abs(a[i] - b[i])
+    return s / a.size.toFloat()
+}
+
+private fun quadDist(a: List<Offset>, b: List<Offset>): Float = (0 until 4).sumOf { hypot(a[it].x - b[it].x, a[it].y - b[it].y).toDouble() }.toFloat() / 4f
+
+private fun quadBlend(a: List<Offset>, b: List<Offset>, t: Float): List<Offset> =
+    List(4) { Offset(a[it].x + (b[it].x - a[it].x) * t, a[it].y + (b[it].y - a[it].y) * t) }
+
 /**
  * What the live camera knows about the paper: its outline (smoothed), whether the shot is good, and what to tell the person
  * (the same rules as Image Fixer's phone scanner: too close / too far / off-centre / tilted / hold still).
@@ -179,6 +212,7 @@ private class LiveGuide {
     var title by mutableStateOf<String?>(null)
     var sub by mutableStateOf("")
     var kind by mutableIntStateOf(1)                       // 0 = move the phone, 1 = almost, 2 = good
+    var focusTick by mutableIntStateOf(0)                  // +1 every time a page gets locked: the camera focuses on it at once
     var last = 0L
     private var stable = 0
     private var lastLight = 0
@@ -186,27 +220,85 @@ private class LiveGuide {
     private var miss = 0
     var prev: List<Offset>? = null
     val busy = AtomicBoolean(false)
+
+    // LOCK: the page is found ONCE (two looks in a row agree), then it is held. While the picture does not move nothing is searched
+    // again (so no flicker, no wrong re-detection); a new search starts only when the camera really moved.
+    @Volatile private var lockSig: IntArray? = null
+    private var lockQ: List<Offset>? = null
+    private var cand: List<Offset>? = null
+    private var candN = 0
+    private var lockMiss = 0
+    val isLocked: Boolean get() = lockSig != null
+
     @Volatile var on = true
+        set(v) { field = v; if (v) clearLock() }
+
+    private fun clearLock() { lockSig = null; lockQ = null; cand = null; candN = 0; lockMiss = 0; stable = 0; good = false }
+
+    private fun lock(q: List<Offset>, sig: IntArray) {
+        lockQ = q; lockSig = sig; cand = null; candN = 0; lockMiss = 0
+        quad = q; prev = q; stable = 3                      // one more steady look and the shot is "good"
+        focusTick++                                         // focus on the page right now
+    }
+
+    /** Called on every frame (cheap). true = the page finder must run; false = nothing changed, keep the lock. */
+    fun decide(sig: IntArray): Boolean {
+        val ls = lockSig ?: return true
+        return sigDiff(ls, sig) >= 4.5f
+    }
+
+    /** The picture did not move: keep the locked outline, only re-judge (steady, light, ...). */
+    fun hold(w: Int, h: Int, s: Str, rgb: ByteArray) {
+        val lq = lockQ ?: return
+        aspect = w.toFloat() / h
+        stable++
+        quad = lq; prev = lq
+        judge(lq, w, h, s, rgb)
+    }
 
     private fun say(t: String, sb: String, k: Int) { title = t; sub = sb; kind = k }
 
-    fun update(q: List<Offset>?, w: Int, h: Int, s: Str, rgb: ByteArray? = null) {
+    fun update(q: List<Offset>?, w: Int, h: Int, s: Str, rgb: ByteArray, sig: IntArray) {
         aspect = w.toFloat() / h
+        val ls = lockSig
+        if (ls != null && sigDiff(ls, sig) >= 11f) clearLock()          // the phone moved a lot: the old lock is not the page any more
+        val lk = lockQ
         if (q == null) {
             stable = 0; good = false
-            if (++miss > 2) { prev = null; quad = null; say(s.liveLooking, s.liveLookingSub, 1) }
+            if (lk != null && ++lockMiss <= 4) return                   // a locked page is not dropped because of one empty look
+            if (lk != null) clearLock()
+            cand = null; candN = 0
+            if (++miss > 1) { prev = null; quad = null; say(s.liveLooking, s.liveLookingSub, 1) }
             return
         }
-        miss = 0
-        val p = prev
-        var move = 1f
-        var sm = q
-        if (p != null) {
-            move = (0 until 4).sumOf { hypot(q[it].x - p[it].x, q[it].y - p[it].y).toDouble() }.toFloat() / 4f
-            sm = List(4) { Offset((q[it].x + p[it].x) / 2f, (q[it].y + p[it].y) / 2f) }
+        miss = 0; lockMiss = 0
+        if (lk != null) {
+            if (quadDist(q, lk) < 0.04f) {                              // same page: refine a little, keep it locked
+                val b = quadBlend(lk, q, 0.3f)
+                lockQ = b; lockSig = sig; cand = null; candN = 0
+                quad = b; prev = b; stable++
+                judge(b, w, h, s, rgb)
+                return
+            }
+            val c = cand                                                // a different outline: it must show up twice before it replaces the lock
+            candN = if (c != null && quadDist(c, q) < 0.03f) candN + 1 else 1
+            cand = q
+            if (candN >= 2) { lock(if (c != null) quadBlend(c, q, 0.5f) else q, sig); judge(lockQ ?: q, w, h, s, rgb) }
+            else { stable = 0; judge(lk, w, h, s, rgb) }
+            return
         }
-        prev = sm; quad = sm
-        stable = if (move < 0.014f) stable + 1 else 0
+        // looking for the page: show the first look at once, lock when two looks in a row agree
+        val c = cand
+        candN = if (c != null && quadDist(c, q) < 0.03f) candN + 1 else 1
+        cand = q
+        if (candN >= 2) {
+            lock(if (c != null) quadBlend(c, q, 0.5f) else q, sig)
+            judge(lockQ ?: q, w, h, s, rgb)
+            return
+        }
+        val p = prev
+        val sm = if (p != null) quadBlend(p, q, 0.5f) else q
+        prev = sm; quad = sm; stable = 0
         judge(sm, w, h, s, rgb)
     }
 
@@ -320,6 +412,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     val guide = remember { LiveGuide() }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var torch by remember { mutableStateOf(false) }
+    var camZoom by remember { mutableFloatStateOf(1f) }
     var shooting by remember { mutableStateOf(false) }
     val flash = remember { androidx.compose.animation.core.Animatable(0f) }
 
@@ -346,15 +439,22 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
         analysis.setAnalyzer(analysisExecutor) { proxy ->
             try {
                 val now = System.currentTimeMillis()
-                if (guide.on && !guide.busy.get() && now - guide.last > 120) {
+                // looking: about 15 looks per second; locked: only a cheap check whether the picture moved
+                if (guide.on && !guide.busy.get() && now - guide.last > (if (guide.isLocked) 90 else 60)) {
                     val f = frameToRgb(proxy, 320)
                     if (f != null) {
                         guide.last = now
+                        val sig = frameSig(f.rgb, f.w, f.h)
+                        val search = guide.decide(sig)
                         guide.busy.set(true)
                         scope.launch {
                             try {
-                                val q = Engine.live(f.rgb, f.w, f.h)
-                                if (guide.on) guide.update(q, f.w, f.h, strNow, f.rgb)
+                                if (guide.on) {
+                                    if (search) {
+                                        val q = Engine.live(f.rgb, f.w, f.h)
+                                        if (guide.on) guide.update(q, f.w, f.h, strNow, f.rgb, sig)
+                                    } else guide.hold(f.w, f.h, strNow, f.rgb)
+                                }
                             } catch (_: Exception) {
                             } finally { guide.busy.set(false) }
                         }
@@ -376,15 +476,23 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     }
     // tips: shown by themselves the first time, and whenever the Tips button is pressed
     var tips by remember { mutableStateOf(if (vm.camForSig) !vm.sigTipsSeen else !vm.camTipsSeen) }
-    // when the paper is steady and good: focus on the middle of the frame, so the text is sharp when the button is pressed
-    LaunchedEffect(guide.good) {
-        if (guide.good) {
-            val c = camera ?: return@LaunchedEffect
-            try {
-                val p = previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
-                c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(p).build())
-            } catch (_: Exception) { }
-        }
+    // the moment a page is locked: focus (and meter light / white balance) right ON THE PAGE, not on the middle of the screen
+    LaunchedEffect(guide.focusTick) {
+        if (guide.focusTick == 0) return@LaunchedEffect
+        val c = camera ?: return@LaunchedEffect
+        val q = guide.prev ?: return@LaunchedEffect
+        try {
+            val W = previewView.width.toFloat(); val H = previewView.height.toFloat()
+            if (W <= 0f || H <= 0f) return@LaunchedEffect
+            val ar = guide.aspect
+            val dw = if (W / H < ar) W else H * ar
+            val dh = if (W / H < ar) W / ar else H
+            val ox = (W - dw) / 2f; val oy = (H - dh) / 2f
+            val cx = q.sumOf { it.x.toDouble() }.toFloat() / 4f
+            val cy = q.sumOf { it.y.toDouble() }.toFloat() / 4f
+            val p = previewView.meteringPointFactory.createPoint(ox + cx * dw, oy + cy * dh)
+            c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(p).build())
+        } catch (_: Exception) { }
     }
 
     fun shoot() {
@@ -440,6 +548,18 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                         val c = camera ?: return@detectTapGestures
                         val point = previewView.meteringPointFactory.createPoint(pos.x, pos.y)
                         c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(point).build())
+                    }
+                }
+                .pointerInput(camera) {
+                    // pinch with two fingers = camera zoom (the preview, the live outline and the photo all zoom together)
+                    detectTransformGestures { _, _, z, _ ->
+                        val c = camera ?: return@detectTransformGestures
+                        if (z != 1f) {
+                            val zs = c.cameraInfo.zoomState.value
+                            val r = (camZoom * z).coerceIn(zs?.minZoomRatio ?: 1f, zs?.maxZoomRatio ?: 5f)
+                            c.cameraControl.setZoomRatio(r)
+                            camZoom = r
+                        }
                     }
                 },
         )
@@ -528,6 +648,13 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                             Text(t, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             if (sb.isNotEmpty()) Text(sb, color = Color(0xCCFFFFFF), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         }
+                    }
+                }
+            }
+            if (camZoom > 1.05f) {                                     // tap the chip: back to 1x
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = Color(0x99000000), modifier = Modifier.clickable { camera?.cameraControl?.setZoomRatio(1f); camZoom = 1f }) {
+                        Text(String.format("%.1f\u00D7", camZoom), Modifier.padding(horizontal = 14.dp, vertical = 6.dp), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }

@@ -282,7 +282,7 @@ private fun StepPills(step: Int, a: String, b: String) {
 private fun CleanStage(src: ImageBitmap?, photoW: Int, box: RectBox, prev: ImageBitmap?, showOrig: Boolean, making: Boolean, onHold: (Boolean) -> Unit) {
     val clock = rememberClock()
     val busyA by animateFloatAlways(if (making) 1f else 0f, tween(220), "making")
-    Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onPress = { onHold(true); tryAwaitRelease(); onHold(false) }) }) {
+    ZoomBox(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onPress = { onHold(true); tryAwaitRelease(); onHold(false) }) }) {
         Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp))) {
             val bw = (box.r - box.l).coerceAtLeast(1f); val bh = (box.b - box.t).coerceAtLeast(1f)
             val sc = min(size.width / bw, size.height / bh)

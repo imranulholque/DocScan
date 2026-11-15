@@ -1,5 +1,7 @@
 package app.docscan
 
+import androidx.compose.ui.draw.clipToBounds
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -45,14 +47,21 @@ fun QuadCropper(
 ) {
     var active by remember { mutableIntStateOf(-1) }            // 0..3 corner, 4..7 side (top, right, bottom, left)
     var focus by remember { mutableStateOf<Offset?>(null) }
+    val zp = remember { ZoomPan() }
+    /** where the picture sits now (zoom and pan included): left, top, screen pixels per picture pixel */
+    fun vfit(cw: Float, ch: Float): Triple<Float, Float, Float> {
+        val (_, _, s0) = fitQ(cw, ch, iw, ih)
+        val s2 = s0 * zp.zoom
+        return Triple((cw - iw * s2) / 2f + zp.pan.x, (ch - ih * s2) / 2f + zp.pan.y, s2)
+    }
 
     Canvas(
-        modifier.fillMaxSize().pointerInput(iw, ih) {
+        modifier.fillMaxSize().clipToBounds().pointerInput(iw, ih) {
             val hit = 44.dp.toPx()
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 if (quad.size != 4) return@awaitEachGesture
-                val (ox, oy, sc) = fitQ(size.width.toFloat(), size.height.toFloat(), iw, ih)
+                val (ox, oy, sc) = vfit(size.width.toFloat(), size.height.toFloat())
                 fun scr(p: Offset) = Offset(ox + p.x * sc, oy + p.y * sc)
                 val pos = down.position
                 var best = -1; var bd = Float.MAX_VALUE
@@ -65,7 +74,13 @@ fun QuadCropper(
                     }
                     if (bd > hit) best = -1
                 }
-                if (best < 0) return@awaitEachGesture
+                if (best < 0) {
+                    if (zp.zoomed) drag(down.id) { change ->       // zoomed in: dragging on empty space moves the picture
+                        change.consume()
+                        zp.panBy(change.position - change.previousPosition, size.width.toFloat(), size.height.toFloat())
+                    }
+                    return@awaitEachGesture
+                }
                 val grab = if (best < 4) pos - scr(quad[best]) else Offset.Zero
                 val k0 = best - 4
                 val a0 = if (best >= 4) quad[k0] else Offset.Zero
@@ -98,9 +113,9 @@ fun QuadCropper(
                 }
                 active = -1; focus = null
             }
-        },
+        }.zoomGestures(zp, onePan = false),
     ) {
-        val (ox, oy, sc) = fitQ(size.width, size.height, iw, ih)
+        val (ox, oy, sc) = vfit(size.width, size.height)
         val dw = iw * sc; val dh = ih * sc
         bmp?.let {
             drawImage(

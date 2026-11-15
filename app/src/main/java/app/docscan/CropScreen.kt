@@ -1,5 +1,7 @@
 package app.docscan
 
+import androidx.compose.ui.draw.clipToBounds
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -218,9 +220,17 @@ private fun CropBody(vm: AppVM, page: Page) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
             val wPx = constraints.maxWidth.toFloat()
             val hPx = constraints.maxHeight.toFloat()
-            val scale = min(wPx / page.w, hPx / page.h)
-            val ox = (wPx - page.w * scale) / 2f
-            val oy = (hPx - page.h * scale) / 2f
+            val zp = remember(page.id) { ZoomPan() }
+            val fit = min(wPx / page.w, hPx / page.h)
+            val scale = fit * zp.zoom
+            val ox = (wPx - page.w * scale) / 2f + zp.pan.x
+            val oy = (hPx - page.h * scale) / 2f + zp.pan.y
+            // live numbers for the finger handlers (the vals above are only fresh at the last redraw)
+            fun scL() = fit * zp.zoom
+            fun oxL() = (wPx - page.w * scL()) / 2f + zp.pan.x
+            fun oyL() = (hPx - page.h * scL()) / 2f + zp.pan.y
+            fun toScreenL(p: Offset) = Offset(oxL() + p.x * scL(), oyL() + p.y * scL())
+            val panMode = remember { BooleanArray(1) }
             val hit = with(density) { 44.dp.toPx() }
             val cr = with(density) { 11.dp.toPx() }
             val sq = with(density) { 8.dp.toPx() }
@@ -231,20 +241,20 @@ private fun CropBody(vm: AppVM, page: Page) {
             fun mid(i: Int) = (quad[i] + quad[(i + 1) % 4]) / 2f
 
             Canvas(
-                Modifier.fillMaxSize().pointerInput(page.id, scale) {
+                Modifier.fillMaxSize().clipToBounds().pointerInput(page.id, fit) {
                     detectDragGestures(
                         onDragStart = { pos ->
-                            drag.idx = -1
+                            drag.idx = -1; panMode[0] = false
                             if (quad.size == 4) {
                                 var best = -1; var bd = Float.MAX_VALUE
                                 for (i in 0 until 4) {
-                                    val d = (toScreen(quad[i]) - pos).getDistance()
+                                    val d = (toScreenL(quad[i]) - pos).getDistance()
                                     if (d < bd) { bd = d; best = i }
                                 }
                                 if (bd > hit) {
                                     best = -1; bd = Float.MAX_VALUE
                                     for (k in 0 until 4) {
-                                        val d = (toScreen(mid(k)) - pos).getDistance()
+                                        val d = (toScreenL(mid(k)) - pos).getDistance()
                                         if (d < bd) { bd = d; best = 4 + k }
                                     }
                                     if (bd > hit) best = -1
@@ -254,7 +264,7 @@ private fun CropBody(vm: AppVM, page: Page) {
                                     val k = best - 4
                                     drag.a = quad[k]; drag.b = quad[(k + 1) % 4]; drag.acc = Offset.Zero
                                 }
-                                if (best >= 0) touched = true
+                                if (best >= 0) touched = true else if (zp.zoomed) panMode[0] = true      // zoomed in: dragging on empty space moves the picture
                             }
                             active = drag.idx
                         },
@@ -262,9 +272,10 @@ private fun CropBody(vm: AppVM, page: Page) {
                         onDragCancel = { drag.idx = -1; active = -1 },
                         onDrag = { change, amount ->
                             val i = drag.idx
+                            if (i < 0 && panMode[0]) { change.consume(); zp.panBy(amount, wPx, hPx); return@detectDragGestures }
                             if (i >= 0) {
                                 change.consume()
-                                val d = Offset(amount.x / scale, amount.y / scale)
+                                val d = Offset(amount.x / scL(), amount.y / scL())
                                 if (i < 4) {
                                     val o = quad[i]
                                     quad[i] = Offset((o.x + d.x).coerceIn(0f, page.w - 1f), (o.y + d.y).coerceIn(0f, page.h - 1f))
@@ -282,7 +293,7 @@ private fun CropBody(vm: AppVM, page: Page) {
                             }
                         },
                     )
-                },
+                }.zoomGestures(zp, onePan = false),
             ) {
                 bmp?.let {
                     drawImage(

@@ -1,5 +1,7 @@
 package app.docscan
 
+import androidx.compose.ui.draw.clipToBounds
+
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -81,13 +83,20 @@ fun RectCropper(
     var focus by remember { mutableStateOf<Offset?>(null) }       // the picture point under the handle that is dragged (for the magnifier)
     val st = remember { RectDrag() }
     val gridA by animateFloatAlways(if (active >= 0) 1f else 0f, tween(200), "grid")
+    val zp = remember { ZoomPan() }
+    /** where the picture sits now (zoom and pan included): left, top, screen pixels per picture pixel */
+    fun vfit(cw: Float, ch: Float): Triple<Float, Float, Float> {
+        val (_, _, s0) = fitOf(cw, ch, iw, ih)
+        val s2 = s0 * zp.zoom
+        return Triple((cw - iw * s2) / 2f + zp.pan.x, (ch - ih * s2) / 2f + zp.pan.y, s2)
+    }
 
     Canvas(
-        modifier.fillMaxSize().pointerInput(iw, ih) {
+        modifier.fillMaxSize().clipToBounds().pointerInput(iw, ih) {
             val hit = 40.dp.toPx()
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                val (ox, oy, sc) = fitOf(size.width.toFloat(), size.height.toFloat(), iw, ih)
+                val (ox, oy, sc) = vfit(size.width.toFloat(), size.height.toFloat())
                 fun sx(x: Float) = ox + x * sc
                 fun sy(y: Float) = oy + y * sc
                 val pos = down.position
@@ -107,6 +116,13 @@ fun RectCropper(
                     best >= 0 -> best
                     pos.x in L..R && pos.y in T..B -> 8
                     else -> 9
+                }
+                if (st.id == 9 && zp.zoomed) {                    // zoomed in: dragging on the outside moves the picture (no new box)
+                    drag(down.id) { change ->
+                        change.consume()
+                        zp.panBy(change.position - change.previousPosition, size.width.toFloat(), size.height.toFloat())
+                    }
+                    return@awaitEachGesture
                 }
                 st.grab = if (best >= 0) pos - handles[best] else Offset.Zero
                 st.start = pos
@@ -153,9 +169,9 @@ fun RectCropper(
                 }
                 active = -1; focus = null
             }
-        },
+        }.zoomGestures(zp, onePan = false),
     ) {
-        val (ox, oy, sc) = fitOf(size.width, size.height, iw, ih)
+        val (ox, oy, sc) = vfit(size.width, size.height)
         val dw = iw * sc; val dh = ih * sc
         bmp?.let {
             drawImage(

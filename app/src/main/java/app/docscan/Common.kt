@@ -1,5 +1,22 @@
 package app.docscan
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.positionChanged
+
 import android.app.Activity
 import android.content.Context
 import androidx.compose.animation.core.Animatable
@@ -287,5 +304,73 @@ fun PdfSizeRow(vm: AppVM) {
     val s = LocalStr.current
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (sz in Paper.sizes) Choice(Paper.label(sz, s), vm.pdfSize == sz) { vm.choosePdfSize(sz) }
+    }
+}
+
+
+// ---------------------------------------------------------------------------------------------- zoom / pan everywhere
+/** Zoom + pan of ONE picture. Used by every screen that shows a page, so pinch / double-tap works the same everywhere. */
+class ZoomPan {
+    var zoom by mutableFloatStateOf(1f)
+    var pan by mutableStateOf(Offset.Zero)          // pixels, from the centred place
+    val zoomed: Boolean get() = zoom > 1.01f
+    fun reset() { zoom = 1f; pan = Offset.Zero }
+
+    /** Zoom to [nz0] and keep the screen point [focus] under the fingers; [by] = how far the fingers moved; w x h = the box. */
+    fun apply(nz0: Float, focus: Offset, by: Offset, w: Float, h: Float) {
+        val nz = nz0.coerceIn(1f, 8f)
+        if (nz <= 1.01f) { reset(); return }
+        val c = Offset(w / 2f, h / 2f)
+        val raw = focus + by - c - (focus - c - pan) * (nz / zoom)
+        val mx = w * (nz - 1f) / 2f; val my = h * (nz - 1f) / 2f
+        zoom = nz
+        pan = Offset(raw.x.coerceIn(-mx, mx), raw.y.coerceIn(-my, my))
+    }
+
+    /** Move the zoomed picture by [d] screen pixels. */
+    fun panBy(d: Offset, w: Float, h: Float) {
+        if (!zoomed) return
+        val mx = w * (zoom - 1f) / 2f; val my = h * (zoom - 1f) / 2f
+        pan = Offset((pan.x + d.x).coerceIn(-mx, mx), (pan.y + d.y).coerceIn(-my, my))
+    }
+}
+
+/** Two fingers = pinch zoom + move, double tap = zoom in / back. [onePan] = one finger moves the picture too (when it is zoomed in). */
+fun Modifier.zoomGestures(zp: ZoomPan, onePan: Boolean): Modifier = this
+    .pointerInput(zp) {
+        detectTapGestures(onDoubleTap = { tap ->
+            if (zp.zoomed) zp.reset() else zp.apply(2.5f, tap, Offset.Zero, size.width.toFloat(), size.height.toFloat())
+        })
+    }
+    .pointerInput(zp, onePan) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            do {
+                val ev = awaitPointerEvent()
+                val two = ev.changes.count { it.pressed } >= 2
+                if (two || (onePan && zp.zoomed)) {
+                    val z = ev.calculateZoom()
+                    val p = ev.calculatePan()
+                    if (z != 1f || p != Offset.Zero) {
+                        zp.apply(zp.zoom * z, ev.calculateCentroid(useCurrent = false), p, size.width.toFloat(), size.height.toFloat())
+                        ev.changes.forEach { if (it.positionChanged()) it.consume() }
+                    }
+                }
+            } while (ev.changes.any { it.pressed })
+        }
+    }
+
+/** Any content (a picture, a preview) that can be pinched, dragged and double-tapped. [onZoomed] tells a pager to stop swiping while zoomed in. */
+@Composable
+fun ZoomBox(modifier: Modifier = Modifier, onZoomed: (Boolean) -> Unit = {}, content: @Composable BoxScope.() -> Unit) {
+    val zp = remember { ZoomPan() }
+    val z = zp.zoomed
+    LaunchedEffect(z) { onZoomed(z) }
+    DisposableEffect(Unit) { onDispose { onZoomed(false) } }
+    Box(modifier.clipToBounds().zoomGestures(zp, onePan = true)) {
+        Box(
+            Modifier.fillMaxSize().graphicsLayer { scaleX = zp.zoom; scaleY = zp.zoom; translationX = zp.pan.x; translationY = zp.pan.y },
+            content = content,
+        )
     }
 }

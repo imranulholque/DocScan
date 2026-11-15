@@ -258,10 +258,12 @@ fun ReviewScreen(vm: AppVM) {
                     }
                     else -> {
                         val bmp by rememberPageBitmap(pg)
-                        PaperPreview(
-                            bmp, if (vm.fmt == "pdf") vm.pdfSize else "fit", vm.numPos, vm.numSize, i + 1,
-                            Modifier.fillMaxSize(), pg.sigs, sigBmps,
-                        )
+                        ZoomBox(Modifier.fillMaxSize(), onZoomed = { zoomed = it }) {
+                            PaperPreview(
+                                bmp, if (vm.fmt == "pdf") vm.pdfSize else "fit", vm.numPos, vm.numSize, i + 1,
+                                Modifier.fillMaxSize(), pg.sigs, sigBmps,
+                            )
+                        }
                     }
                 }
             }

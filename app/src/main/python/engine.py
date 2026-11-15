@@ -43,14 +43,37 @@ def _save_jpg(im, dst, q=95):
     im.convert("RGB").save(dst, "JPEG", quality=q, subsampling=0)
 
 
+def _to_srgb(im):
+    """Phone photos often carry a wide-gamut colour profile (Display P3 ...). The phone screen honours it, but Pillow ignores it and the
+    saved copy has none, so the same numbers were read as sRGB: colours came out flatter / shifted after the shot. Convert to real sRGB."""
+    icc = im.info.get("icc_profile")
+    if not icc:
+        return im
+    try:
+        import io
+        from PIL import ImageCms
+        src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        try:
+            if "srgb" in ImageCms.getProfileDescription(src).lower():
+                return im
+        except Exception:
+            pass
+        dst = ImageCms.createProfile("sRGB")
+        base = im if im.mode == "RGB" else im.convert("RGB")
+        return ImageCms.profileToProfile(base, src, dst, renderingIntent=1, outputMode="RGB")
+    except Exception:
+        return im
+
+
 def prepare(src, dst, max_side=2600):
-    """Camera / gallery photo -> upright working JPEG (EXIF fixed, long side <= max_side). Returns 'w,h'."""
+    """Camera / gallery photo -> upright working JPEG (EXIF fixed, colour profile -> sRGB, long side <= max_side). Returns 'w,h'."""
     im = Image.open(src)
     try:
         im.draft("RGB", (max_side, max_side))          # fast, low-memory JPEG decode
     except Exception:
         pass
     im.load()
+    im = _to_srgb(im)
     try:
         im = ImageOps.exif_transpose(im)
     except Exception:
