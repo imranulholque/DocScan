@@ -84,3 +84,8 @@ Works like Image Fixer's updater, with the same rules:
   (Effect / Signature / Page size / Page number), new sliders, Save and Share in the top bar, Reset all in the ⋮ menu.
 - **Camera** gives better instructions: too dark / shadow on the paper / glare messages, auto focus when steady, and a **?** Tips button
   (shown automatically the first time). Signature photos have their own tips.
+
+## New: line finder, main-subject lock, ID card
+- **`python/linefinder.py`**: finds the 4 straight sides of the page (LSD lines, merged, 2+2 combination, scored by edge coverage, colour jump, polarity, paper colour just inside each side, and "must hold the picture centre"). About 30 ms. Used first by `finder.find_page` (auto crop) and by the live camera outline (`engine.live_lines`); when fewer than 4 real corners are seen it falls back to the old finders.
+- **Main subject**: the outline holding the picture centre wins over a neighbour paper / table edge; edge snapping uses the NEAREST strong edge (not the outermost) and never grows the page by more than 20%.
+- **ID card** (Home -> "ID card scan"): take front, then back (camera or gallery), each is cut like a normal page, then `engine.id_card` puts both on ONE A4 page (centred, same size, rounded corners, equal gap; real size 86 mm or large 120 mm). The result opens on the Review screen like any page (looks, signature, PDF/JPG/PNG).
