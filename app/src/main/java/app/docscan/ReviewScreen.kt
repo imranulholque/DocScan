@@ -408,7 +408,7 @@ private fun EffectControls(vm: AppVM, cur: Page) {
     // all the looks in one row that scrolls sideways (the first five are the classics, the rest are made for one purpose each)
     val looks = listOf(
         "orig" to s.fOrig, "color" to s.fColor, "vivid" to s.fVivid, "gray" to s.fGray, "bw" to s.fBw,
-        "noshadow" to s.fNoShadow, "lighten" to s.fLighten, "whiteboard" to s.fWhiteboard,
+        "whiten" to s.fWhiten, "noshadow" to s.fNoShadow, "lighten" to s.fLighten, "whiteboard" to s.fWhiteboard,
     )
     val rowScroll = rememberScrollState()
     Row(Modifier.fillMaxWidth().horizontalScroll(rowScroll), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -422,7 +422,7 @@ private fun EffectControls(vm: AppVM, cur: Page) {
     Text(
         when (cur.mode) {
             "orig" -> s.clarityHintOrig; "vivid" -> s.vividHint
-            "noshadow", "lighten", "whiteboard" -> s.extraHint(cur.mode)
+            "whiten", "noshadow", "lighten", "whiteboard" -> s.extraHint(cur.mode)
             else -> s.clarityHint
         },
         fontSize = 11.sp, lineHeight = 14.sp, color = cs.onSurfaceVariant, maxLines = 2,

@@ -4,6 +4,16 @@ import core
 import scanner
 from PIL import Image, ImageOps
 
+try:                                                    # the fast text-safe looks and the learned page finder need OpenCV
+    import cv2
+    import numpy as np
+    import fastlook
+    import finder
+    FAST = True
+except Exception:                                       # a build without OpenCV: the older (slower) code below is used
+    cv2 = None
+    FAST = False
+
 # extra common paper sizes (PDF points); core.pdf_page() reads core.PAGE_SIZES, so they work everywhere
 core.PAGE_SIZES.update({"a5": (419.528, 595.276), "legal": (612.0, 1008.0)})
 
@@ -14,6 +24,7 @@ try:
         scanner.cv2.setNumThreads(2)
 except Exception:
     pass
+DETECT_SIDE_FAST = 1000      # the learned finder works on a copy with this long side (it shrinks further inside)
 
 NUM_MARGIN = 28.0            # page number distance from the page edge (PDF points, about 1 cm)
 NUM_DIGIT_H = 0.676          # height of a Times digit (em)
@@ -62,12 +73,28 @@ def _full_frame(W, H, m=0.01):
 
 
 def detect(path):
-    """The PC program's Auto crop finder (scanner.detect_document thresholds), run on a smaller copy.
-    Only the fast OpenCV finder is used here: when it finds no sheet at all the old finder (it needs many seconds on a phone,
-    and the screen looked stuck) is NOT asked; the whole picture is returned as 'not sure' so the person can drag the corners.
+    """Auto crop. FAST (OpenCV): the learned finder (finder.py: many outline candidates -> ranker trained on the user's own corrected
+    crops -> straight-edge snapping); about 0.1 s. Without OpenCV / on any error: the PC program's finder as before.
     Returns 'sure|x0,y0,x1,y1,x2,y2,x3,y3' (TL,TR,BR,BL in picture pixels); sure = 1 / 0."""
     im = _open(path)
     W, H = im.size
+    if FAST:
+        try:
+            k = DETECT_SIDE_FAST / float(max(W, H))
+            small = im.convert("RGB").resize((max(8, round(W * k)), max(8, round(H * k))), Image.Resampling.BILINEAR) if k < 1.0 else im.convert("RGB")
+            if k >= 1.0:
+                k = 1.0
+            q, sure = finder.find_page(np.asarray(small))
+            if q is not None:
+                q = [(float(x) / k, float(y) / k) for x, y in q]
+                q = [(min(max(x, 0.0), W - 1.0), min(max(y, 0.0), H - 1.0)) for x, y in q]
+                return "%d|%s" % (1 if sure else 0, ",".join("%.2f" % v for p in q for v in p))
+        except Exception:
+            pass
+    return _detect_old(im, W, H)
+
+
+def _detect_old(im, W, H):
     k = DETECT_SIDE / float(max(W, H))
     small = im.resize((max(8, round(W * k)), max(8, round(H * k))), Image.Resampling.BILINEAR) if k < 1.0 else im
     if k >= 1.0:
@@ -98,26 +125,23 @@ def _inset(quad, k=0.005):
 
 
 def live(rgb, w, h):
-    """Live camera outline: the same fast OpenCV page finder, run on a small camera frame (raw RGB bytes, w x h, upright).
+    """Live camera outline: the light version of the learned finder on a small camera frame (raw RGB bytes, w x h, upright).
     Returns '' when no page is seen, else 'x0,y0,x1,y1,x2,y2,x3,y3' (TL,TR,BR,BL) as fractions 0..1 of the frame."""
-    if scanner.cv2 is None:
+    if not FAST:
         return ""
     try:
         try:                                           # a Java byte[] arrives as a signed buffer: read the raw bytes
             raw = memoryview(rgb).cast("B").tobytes()
         except Exception:
             raw = bytes(rgb)
-        im = Image.frombytes("RGB", (int(w), int(h)), raw)
-        res = scanner._detect_fast(im)
+        a = np.frombuffer(raw, np.uint8).reshape(int(h), int(w), 3)
+        q, sure = finder.find_page(a, lite=True)
     except Exception:
         return ""
-    if res is None:
+    if q is None or not sure:
         return ""
-    quad, found, info = res
-    area = abs(sum(quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1] for i in range(4))) / 2.0
-    if info.get("score", 0) < 0.35 or area < 0.06 * w * h:
-        return ""
-    return ",".join("%.4f" % v for x, y in quad for v in (x / float(w), y / float(h)))
+    return ",".join("%.4f" % v for x, y in q for v in (x / float(w), y / float(h)))
+
 
 def crop(path, quad_csv, dst):
     """Cut the paper out and remove the camera angle (scanner.straighten). Returns 'w,h'."""
@@ -139,6 +163,11 @@ def rotate(path, dst, turns):
     return "%d,%d" % im.size
 
 
+def fast_ok():
+    """True when the OpenCV based fast finder / looks are available in this build."""
+    return bool(FAST)
+
+
 def look(mode, clarity):
     """The ONE 'Text clarity' slider (0..100): every text option of the PC program merged.
     shadow / paper white / text darkness / clean paper  (core.remove_shadow)
@@ -153,7 +182,7 @@ def look(mode, clarity):
     return t, shadow, sharp
 
 
-def _orig_look(im, clarity):
+def _orig_look_old(im, clarity):
     """'Original' keeps the paper and the colours exactly as photographed; only the writing gets clearer.
     clarity 0 = untouched ... 100 = strongest. Only lightness is changed (core.clarity), so colours never shift."""
     import numpy as np
@@ -228,11 +257,22 @@ def _vivid(im, clarity):
     out = Image.fromarray(np.clip(x * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
     # 4. sharpen the lightness only
+    if FAST:                                              # lightness-only unsharp with a noise core, never past the local min / max (no halos)
+        a = np.ascontiguousarray(np.asarray(out))
+        Yl = cv2.transform(a.astype(np.float32), np.array([[0.299, 0.587, 0.114]], np.float32)).reshape(a.shape[:2])
+        r0 = float(np.clip(0.0009 * max(W, H), 0.7, 2.5))
+        kw = int(2 * np.ceil(2.0 * r0)) + 1
+        se = np.ones((kw, kw), np.uint8)
+        mn, mx = cv2.erode(Yl, se), cv2.dilate(Yl, se)
+        d = Yl - cv2.GaussianBlur(Yl, (0, 0), r0)
+        d = np.sign(d) * np.maximum(np.abs(d) - 2.5, 0.0)
+        Ys = np.minimum(np.maximum(Yl + (0.6 + 1.6 * t) * d, mn), mx)
+        return Image.fromarray(np.clip(a.astype(np.float32) + (Ys - Yl)[..., None] + 0.5, 0, 255).astype(np.uint8))
     arr = core.clarity(np.asarray(out), core.new_look(sharp=int(60 * t)))
     return Image.fromarray(arr)
 
 
-EXTRA = ("noshadow", "lighten", "whiteboard")
+EXTRA = ("noshadow", "lighten", "whiteboard", "whiten")
 
 
 def _light_gain(rgb_arr, t, reach):
@@ -274,7 +314,7 @@ def _extra_look(im, mode, clarity):
         lo = min(cap, float(np.percentile(Yv[::max(1, Yv.shape[0] // 400), ::max(1, Yv.shape[1] // 400)], pct)))
         return np.clip((x - lo * (0.4 + 0.6 * t)) / (1.0 - lo * (0.4 + 0.6 * t)), 0.0, 1.0)
 
-    if mode == "noshadow":
+    if mode in ("noshadow", "whiten"):
         x = np.clip(x * _light_gain(rgb, t, 0.7)[..., None], 0.0, 1.0)
         x = black_from(white_to(x, 75, 0.97), 0.6, 0.25)
     elif mode == "lighten":
@@ -311,7 +351,7 @@ def _full_look(im, mode, clarity):
 FULL_AT = 60.0       # slider value where a look is fully applied (the default); below it the look fades back to the original
 
 
-def text_clarity(im, tc):
+def text_clarity_old(im, tc):
     """The TEXT CLARITY slider for every look (0 = untouched ... 100 = strongest): one mix of the Image Fixer text options
     (text sharpness, line / shape sharpness, faint strokes, text darkness, clean specks). It runs on the picture BEFORE the look,
     so faint or soft writing is made bolder and crisper first and the look then turns it into clean black text on white paper
@@ -333,6 +373,36 @@ def _turn(im, rot):
     return im
 
 
+def _orig_look(im, clarity):
+    """'Original': paper and colours exactly as photographed, only the writing gets clearer (text-selective: paper pixels never change)."""
+    if not FAST:
+        return _orig_look_old(im, clarity)
+    t = max(0.0, min(1.0, float(clarity) / 100.0))
+    if t <= 0.0:
+        return im
+    a = np.ascontiguousarray(np.asarray(im.convert("RGB")))
+    return Image.fromarray(fastlook.clarify(a, t))
+
+
+def _apply_fast(im, mode, clarity, tc):
+    a = np.ascontiguousarray(np.asarray(im.convert("RGB")))
+    c = float(clarity)
+    M = fastlook.Model(a)
+    base = fastlook.clarify(a, max(0.0, min(1.0, float(tc) / 100.0)), M)
+    if c <= 0.0:
+        return Image.fromarray(base)
+    if mode == "whiten":
+        out = fastlook.whiten(base, 1.0, M)
+    elif mode in ("color", "gray", "bw"):
+        out = fastlook.scan(base, mode, min(1.0, c / 100.0), M)
+    else:
+        out = np.asarray(_full_look(Image.fromarray(base), mode, c).convert("RGB"))
+    w = min(1.0, c / FULL_AT)
+    if w < 1.0:
+        out = cv2.addWeighted(base, 1.0 - w, np.ascontiguousarray(out), w, 0.0)
+    return Image.fromarray(out)
+
+
 def apply(im, mode, clarity, tc=0):
     """PIL image -> PIL image. mode: orig | color | vivid | gray | bw.
     Like Lightroom's effect amount: 0 = the original picture, FULL_AT = the look as designed, above = stronger.
@@ -340,8 +410,13 @@ def apply(im, mode, clarity, tc=0):
     and `tc` is the text clarity (0 = off)."""
     if mode == "orig":
         return _orig_look(im, clarity)
+    if FAST:
+        try:
+            return _apply_fast(im, mode, clarity, tc)
+        except Exception:
+            pass
     c = float(clarity)
-    base = text_clarity(im.convert("RGB"), tc)
+    base = text_clarity_old(im.convert("RGB"), tc)
     if c <= 0.0:
         return base
     out = _full_look(base, mode, c)

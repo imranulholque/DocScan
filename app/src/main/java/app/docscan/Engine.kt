@@ -41,8 +41,21 @@ object Engine {
     suspend fun prepare(src: String, dst: String): Pair<Int, Int> =
         py { size(mod.callAttr("prepare", src, dst).toString()) }
 
-    /** Auto crop after a photo: the native finder (same one as Image Fixer's phone camera); the Python finder is only the safety net. */
+    /** Auto crop after a photo. With OpenCV in the build: the learned Python finder (engine.detect, about 0.1 s, trained on the person's own
+     *  corrected crops). Otherwise (or on any error) the native Kotlin finder, as before; the old Python finder is only the last safety net. */
     suspend fun detect(path: String): Detect {
+        val fast = try {
+            py { mod.callAttr("fast_ok").toBoolean() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) { false }
+        if (fast) {
+            try {
+                return detectPython(path)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Throwable) { }
+        }
         try {
             val r = withContext(finder) { PageFinder.detect(path) }
             return Detect(r.first, r.second)
