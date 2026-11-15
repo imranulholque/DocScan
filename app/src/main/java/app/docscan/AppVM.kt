@@ -739,7 +739,7 @@ fun decodeBitmap(path: String, maxSide: Int): ImageBitmap? {
 }
 
 /** Camera / gallery photo -> upright working JPEG (EXIF turned, long side <= maxSide). Native and fast. Returns (w, h). */
-suspend fun prepareNative(src: File, dst: File, maxSide: Int = 2600): Pair<Int, Int> = withContext(Dispatchers.IO) {
+suspend fun prepareNative(src: File, dst: File, maxSide: Int = 3300): Pair<Int, Int> = withContext(Dispatchers.IO) {
     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(src.absolutePath, o)
     if (o.outWidth <= 0 || o.outHeight <= 0) throw IllegalStateException("unreadable picture")

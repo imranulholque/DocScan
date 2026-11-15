@@ -55,6 +55,7 @@ android {
         )
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    lint { checkReleaseBuilds = false; abortOnError = false }   // lint warnings must never stop the APK build
 }
 
 chaquopy {

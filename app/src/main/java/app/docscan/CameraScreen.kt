@@ -81,6 +81,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
@@ -213,6 +215,8 @@ private class LiveGuide {
     var sub by mutableStateOf("")
     var kind by mutableIntStateOf(1)                       // 0 = move the phone, 1 = almost, 2 = good
     var focusTick by mutableIntStateOf(0)                  // +1 every time a page gets locked: the camera focuses on it at once
+    @Volatile var focusDone = false                        // the camera has finished focusing on the locked page: only then the shot is "good" (sharp)
+    var idMode = false                                     // ID card: a small card is normal, do not ask to come closer
     var last = 0L
     private var stable = 0
     private var lastLight = 0
@@ -237,6 +241,7 @@ private class LiveGuide {
 
     private fun lock(q: List<Offset>, sig: IntArray) {
         lockQ = q; lockSig = sig; cand = null; candN = 0; lockMiss = 0
+        focusDone = false
         quad = q; prev = q; stable = 3                      // one more steady look and the shot is "good"
         focusTick++                                         // focus on the page right now
     }
@@ -244,7 +249,7 @@ private class LiveGuide {
     /** Called on every frame (cheap). true = the page finder must run; false = nothing changed, keep the lock. */
     fun decide(sig: IntArray): Boolean {
         val ls = lockSig ?: return true
-        return sigDiff(ls, sig) >= 4.5f
+        return sigDiff(ls, sig) >= 6f
     }
 
     /** The picture did not move: keep the locked outline, only re-judge (steady, light, ...). */
@@ -261,19 +266,19 @@ private class LiveGuide {
     fun update(q: List<Offset>?, w: Int, h: Int, s: Str, rgb: ByteArray, sig: IntArray) {
         aspect = w.toFloat() / h
         val ls = lockSig
-        if (ls != null && sigDiff(ls, sig) >= 11f) clearLock()          // the phone moved a lot: the old lock is not the page any more
+        if (ls != null && sigDiff(ls, sig) >= 15f) clearLock()          // the phone moved a lot: the old lock is not the page any more
         val lk = lockQ
         if (q == null) {
             stable = 0; good = false
-            if (lk != null && ++lockMiss <= 4) return                   // a locked page is not dropped because of one empty look
+            if (lk != null && ++lockMiss <= 10) return                   // a locked page is not dropped because of one empty look
             if (lk != null) clearLock()
             cand = null; candN = 0
-            if (++miss > 1) { prev = null; quad = null; say(s.liveLooking, s.liveLookingSub, 1) }
+            if (++miss > 4) { prev = null; quad = null; say(s.liveLooking, s.liveLookingSub, 1) }
             return
         }
         miss = 0; lockMiss = 0
         if (lk != null) {
-            if (quadDist(q, lk) < 0.04f) {                              // same page: refine a little, keep it locked
+            if (quadDist(q, lk) < 0.06f) {                              // same page: refine a little, keep it locked
                 val b = quadBlend(lk, q, 0.3f)
                 lockQ = b; lockSig = sig; cand = null; candN = 0
                 quad = b; prev = b; stable++
@@ -281,15 +286,15 @@ private class LiveGuide {
                 return
             }
             val c = cand                                                // a different outline: it must show up twice before it replaces the lock
-            candN = if (c != null && quadDist(c, q) < 0.03f) candN + 1 else 1
+            candN = if (c != null && quadDist(c, q) < 0.05f) candN + 1 else 1
             cand = q
-            if (candN >= 2) { lock(if (c != null) quadBlend(c, q, 0.5f) else q, sig); judge(lockQ ?: q, w, h, s, rgb) }
+            if (candN >= 3) { lock(if (c != null) quadBlend(c, q, 0.5f) else q, sig); judge(lockQ ?: q, w, h, s, rgb) }
             else { stable = 0; judge(lk, w, h, s, rgb) }
             return
         }
         // looking for the page: show the first look at once, lock when two looks in a row agree
         val c = cand
-        candN = if (c != null && quadDist(c, q) < 0.03f) candN + 1 else 1
+        candN = if (c != null && quadDist(c, q) < 0.05f) candN + 1 else 1
         cand = q
         if (candN >= 2) {
             lock(if (c != null) quadBlend(c, q, 0.5f) else q, sig)
@@ -352,7 +357,7 @@ private class LiveGuide {
         val lightIssue = if (lightCount >= 3) li else 0
         when {
             clip -> say(s.liveBack, s.liveBackSub, 0)
-            area < 0.3f -> say(s.liveCloser, s.liveCloserSub, 0)
+            area < (if (idMode) 0.08f else 0.3f) -> say(s.liveCloser, s.liveCloserSub, 0)
             abs(dx) > 0.07f || abs(dy) > 0.07f -> {
                 val dir = if (abs(dx) >= abs(dy)) (if (dx > 0) "right" else "left") else (if (dy > 0) "down" else "up")
                 say(s.liveMove(dir), s.liveCenterSub, 0)
@@ -361,7 +366,7 @@ private class LiveGuide {
             lightIssue == 1 -> say(s.liveDark, s.liveDarkSub, 0)
             lightIssue == 2 -> say(s.liveShadow, s.liveShadowSub, 0)
             lightIssue == 3 -> say(s.liveGlare, s.liveGlareSub, 0)
-            stable >= 4 -> { good = true; say(s.liveGood, s.liveGoodSub, 2) }
+            stable >= 4 && focusDone -> { good = true; say(s.liveGood, s.liveGoodSub, 2) }
             else -> say(s.liveAlmost, s.liveAlmostSub, 1)
         }
     }
@@ -378,7 +383,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     val previewView = remember { PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
     val imageCapture = remember {
         ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)       // full noise reduction + edge sharpening, JPEG quality 100 (the latency mode is softer)
             // about 8 MP (well above 1080p) so text stays sharp; never the slow 12-50 MP sensor mode
             .setResolutionSelector(
                 androidx.camera.core.resolutionselector.ResolutionSelector.Builder()
@@ -410,6 +415,7 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val guide = remember { LiveGuide() }
+    guide.idMode = vm.idStep > 0
     var camera by remember { mutableStateOf<Camera?>(null) }
     var torch by remember { mutableStateOf(false) }
     var camZoom by remember { mutableFloatStateOf(1f) }
@@ -476,29 +482,55 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
     }
     // tips: shown by themselves the first time, and whenever the Tips button is pressed
     var tips by remember { mutableStateOf(if (vm.camForSig) !vm.sigTipsSeen else !vm.camTipsSeen) }
-    // the moment a page is locked: focus (and meter light / white balance) right ON THE PAGE, not on the middle of the screen
-    LaunchedEffect(guide.focusTick) {
-        if (guide.focusTick == 0) return@LaunchedEffect
-        val c = camera ?: return@LaunchedEffect
-        val q = guide.prev ?: return@LaunchedEffect
-        try {
-            val W = previewView.width.toFloat(); val H = previewView.height.toFloat()
-            if (W <= 0f || H <= 0f) return@LaunchedEffect
-            val ar = guide.aspect
-            val dw = if (W / H < ar) W else H * ar
-            val dh = if (W / H < ar) W / ar else H
-            val ox = (W - dw) / 2f; val oy = (H - dh) / 2f
-            val cx = q.sumOf { it.x.toDouble() }.toFloat() / 4f
-            val cy = q.sumOf { it.y.toDouble() }.toFloat() / 4f
-            val p = previewView.meteringPointFactory.createPoint(ox + cx * dw, oy + cy * dh)
-            c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(p).build())
-        } catch (_: Exception) { }
+    /** Focus AND meter on the page (centre + 4 points inside it, because blank paper alone has no contrast to focus on) and wait until the camera
+     *  says it is done, at most about 0.9 s. With no page known it uses the middle of the picture. true = the camera reports a sharp focus. */
+    suspend fun focusPage(c: Camera, q: List<Offset>?): Boolean {
+        val W = previewView.width.toFloat(); val H = previewView.height.toFloat()
+        if (W <= 0f || H <= 0f) return false
+        val ar = guide.aspect
+        val dw = if (W / H < ar) W else H * ar
+        val dh = if (W / H < ar) W / ar else H
+        val ox = (W - dw) / 2f; val oy = (H - dh) / 2f
+        fun pt(fx: Float, fy: Float, size: Float) = previewView.meteringPointFactory.createPoint(ox + fx * dw, oy + fy * dh, size)
+        val all = FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
+        val builder: FocusMeteringAction.Builder
+        if (q != null && q.size == 4) {
+            fun at(u: Float, v: Float): Offset {                // a spot inside the outline (TL, TR, BR, BL)
+                val tx = q[0].x + (q[1].x - q[0].x) * u; val ty = q[0].y + (q[1].y - q[0].y) * u
+                val bx = q[3].x + (q[2].x - q[3].x) * u; val by = q[3].y + (q[2].y - q[3].y) * u
+                return Offset(tx + (bx - tx) * v, ty + (by - ty) * v)
+            }
+            val m = at(0.5f, 0.5f)
+            builder = FocusMeteringAction.Builder(pt(m.x, m.y, 0.22f), all)
+            for ((u, v) in listOf(0.3f to 0.3f, 0.7f to 0.3f, 0.3f to 0.7f, 0.7f to 0.7f)) {
+                val p = at(u, v)
+                builder.addPoint(pt(p.x, p.y, 0.16f), FocusMeteringAction.FLAG_AF)
+            }
+        } else builder = FocusMeteringAction.Builder(pt(0.5f, 0.5f, 0.22f), all)
+        val fut = c.cameraControl.startFocusAndMetering(builder.build())
+        val ok = withTimeoutOrNull(900L) {
+            suspendCancellableCoroutine<Boolean> { k ->
+                fut.addListener({
+                    k.resumeWith(Result.success(try { fut.get().isFocusSuccessful } catch (_: Exception) { false }))
+                }, ContextCompat.getMainExecutor(ctx))
+            }
+        }
+        return ok == true
     }
 
-    fun shoot() {
-        if (shooting || vm.busy != null) return
-        shooting = true
-        val hint = guide.prev                                   // where the page was seen a moment ago: the crop screen starts from there
+    // the moment a page is locked: focus (and meter light / white balance) right ON THE PAGE, not on the middle of the screen
+    LaunchedEffect(guide.focusTick, camera) {
+        val tick = guide.focusTick
+        if (tick == 0) return@LaunchedEffect
+        try {
+            val c = camera
+            if (c != null) focusPage(c, guide.prev)
+        } catch (_: Exception) {
+        } finally { if (guide.focusTick == tick) guide.focusDone = true }
+    }
+
+    /** Takes the photo. Where the shutter is pressed before the focus on the locked page is done, it focuses first (max 0.9 s): a sharp photo. */
+    fun capture(hint: List<Offset>?) {
         guide.on = false
         scope.launch {
             flash.snapTo(1f)
@@ -534,6 +566,18 @@ private fun CameraContent(vm: AppVM, leave: () -> Unit) {
                 }
             },
         )
+    }
+
+    fun shoot() {
+        if (shooting || vm.busy != null) return
+        shooting = true
+        val hint = guide.prev                                   // where the page was seen a moment ago: the crop screen starts from there
+        val c = camera
+        if (c == null || (guide.isLocked && guide.focusDone)) { capture(hint); return }
+        scope.launch {
+            try { focusPage(c, guide.prev) } catch (_: Exception) { }
+            capture(hint)
+        }
     }
 
     val count = vm.pages.count { it.cropped != null }

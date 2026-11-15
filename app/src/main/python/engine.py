@@ -65,7 +65,7 @@ def _to_srgb(im):
         return im
 
 
-def prepare(src, dst, max_side=2600):
+def prepare(src, dst, max_side=3300):
     """Camera / gallery photo -> upright working JPEG (EXIF fixed, colour profile -> sRGB, long side <= max_side). Returns 'w,h'."""
     im = Image.open(src)
     try:
@@ -188,11 +188,51 @@ def live_lines(rgb, w, h):
     return ",".join("%.4f" % v for x, y in q for v in (x / float(w), y / float(h)))
 
 
+def _paper_balance(im):
+    """Natural colour: phone cameras often leave a colour cast on a white page (cool LED light -> blueish, lamp -> yellowish).
+    The paper itself is the best reference: the bright, even, nearly colourless part of the page is measured and each colour channel is
+    scaled so that part becomes neutral. Careful on purpose - nothing is changed when the bright part is clearly coloured (a colour photo,
+    a coloured card), when it is not even, or when the cast is tiny; and no channel is ever scaled by more than about 35 %."""
+    try:
+        rgb = im.convert("RGB")
+        w, h = rgb.size
+        k = 360.0 / float(max(w, h))
+        small = rgb.resize((max(8, round(w * k)), max(8, round(h * k))), Image.Resampling.BOX) if k < 1.0 else rgb
+        a = np.asarray(small).astype(np.float32)
+        lum = a[:, :, 0] * 0.299 + a[:, :, 1] * 0.587 + a[:, :, 2] * 0.114
+        mx = a.max(axis=2)
+        mn = a.min(axis=2)
+        ok = mx < 252.0                                   # not burnt out (a burnt-out white has lost its colour)
+        if ok.sum() < 0.2 * ok.size:
+            return im
+        thr = np.percentile(lum[ok], 70)
+        m = ok & (lum >= thr) & (lum > 90.0)              # the bright part = paper (text and shadows are darker)
+        if m.sum() < 0.03 * m.size:
+            return im
+        px = a[m]
+        p = np.median(px, axis=0)                         # paper colour (R, G, B)
+        if float(p.min()) < 60.0:
+            return im
+        if (float(p.max()) - float(p.min())) / float(p.max()) > 0.30:
+            return im                                     # clearly coloured: a photo / coloured page, not a white sheet
+        chroma = (px[:, 2] - px[:, 0]) / np.maximum(px.sum(axis=1) / 3.0, 1.0)
+        if float(np.percentile(chroma, 90) - np.percentile(chroma, 10)) > 0.16:
+            return im                                     # not an even colour: no clear paper here
+        g = float(p.mean()) / p                           # gains that make the paper neutral (same brightness)
+        g = np.clip(g, 1.0 / 1.35, 1.35)
+        if float(np.abs(g - 1.0).max()) < 0.02:
+            return im
+        full = np.asarray(rgb).astype(np.float32) * g.reshape(1, 1, 3)
+        return Image.fromarray(np.clip(full + 0.5, 0, 255).astype(np.uint8), "RGB")
+    except Exception:
+        return im
+
+
 def crop(path, quad_csv, dst):
     """Cut the paper out and remove the camera angle (scanner.straighten). Returns 'w,h'."""
     v = [float(x) for x in quad_csv.split(",")]
     quad = [(v[i], v[i + 1]) for i in range(0, 8, 2)]
-    out = scanner.straighten(_open(path), quad)
+    out = _paper_balance(scanner.straighten(_open(path), quad))
     _save_jpg(out, dst)
     return "%d,%d" % out.size
 
