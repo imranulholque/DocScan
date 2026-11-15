@@ -637,7 +637,7 @@ def render(path, dst, mode, clarity, max_side=0, tc=0):
     return "%d,%d" % out.size
 
 
-def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path="", tc=0, rot=0, sigs=""):
+def _export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12, font_path="", tc=0, rot=0, sigs=""):
     """Final picture: JPG or PNG, full resolution, with the chosen look, the signatures (if any) and the page number (if chosen)."""
     out = apply(_turn(_open(path), rot), mode, float(clarity), float(tc))
     out = sign_page(out, sigs)
@@ -649,7 +649,7 @@ def export_image(path, dst, fmt, mode, clarity, number=0, pos="off", num_size=12
     return "ok"
 
 
-def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
+def _make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
     """pages = 'path|mode|clarity|textclarity|turns|signatures' lines joined by newline. One PDF, one page per picture, in order.
     page_size: fit | a4 | a5 | letter | legal.  num_pos: off | tl tc tr bl bc br (page number in Times-Bold,
     the standard PDF font = Times New Roman Bold look, drawn as real text)."""
@@ -712,6 +712,31 @@ def make_pdf(pages, dst, page_size="fit", num_pos="off", num_size=12):
             f.write(b"%010d 00000 n \n" % offsets[num])
         f.write(b"trailer\n<< /Size %d /Root 1 0 R /Info %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (total, info, xref))
     return "ok"
+
+
+def _threads(n):
+    try:
+        if cv2 is not None:
+            cv2.setNumThreads(n)
+    except Exception:
+        pass
+
+
+def export_image(*a, **k):
+    """Saving shows only a progress bar (nothing animates), so OpenCV may use more cores here than while the camera / crop screens run."""
+    _threads(4)
+    try:
+        return _export_image(*a, **k)
+    finally:
+        _threads(2)
+
+
+def make_pdf(*a, **k):
+    _threads(4)
+    try:
+        return _make_pdf(*a, **k)
+    finally:
+        _threads(2)
 
 
 def thumbs(path, prefix, clarity=60):
