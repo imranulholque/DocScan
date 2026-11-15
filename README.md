@@ -48,6 +48,19 @@ Works like Image Fixer's updater, with the same rules:
 - The very first install is by hand; automatic updates start from the build that contains this feature.
 - A copy built on your own computer has no build number: it never offers updates.
 
+## What changed in this version (speed, auto crop, clarity, whiten)
+- **Auto crop (`python/finder.py`)**: many outline candidates (colour / brightness / k-means / GrabCut / edges / whole frame) -> a small ranker trained on the
+  user's own corrected crops (`learned_data.json`) -> the 4 sides snapped onto the real edge. About 0.1 s. Mean overlap with the person's crop
+  0.72 -> 0.86 (leave-one-out on the 54 samples), 0.83 -> 0.93 on the full-size sample photos. Re-train with new data:
+  `python tools/finder_train/train_finder.py learned_data.json --photos <folder> --write`.
+  The live camera outline is still the Kotlin `PageFinder` (it never waits for Python); `engine.live()` already has the light version of the new finder if you want to switch.
+- **Text clarity (`python/fastlook.py`)**: text-selective. One model of the paper (its colour everywhere) and an ink map; sharpening and darkening are
+  applied only on ink pixels, never past the local min/max (no halos), so the paper can never get noise. The old version sharpened and darkened every pixel
+  with a global noise guess (up to 3x on grain / JPEG noise) - that was the noise.
+- **Whiten page** (new look, Effect tab): the paper becomes white; ink pixels and a 1 px skirt are returned bit for bit.
+- Color / Gray / B&W use the same model: 20-30x faster (about 0.1 s instead of 1-3 s on a 2000 px page).
+- Builds without OpenCV keep the old code path.
+
 ## Notes
 - Android 10 or newer, 64-bit phones (arm64-v8a).
 - The APK is large (about 80-100 MB) because Python, numpy and OpenCV are inside it.
